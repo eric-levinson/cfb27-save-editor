@@ -23,6 +23,8 @@ APP_DIR = Path(__file__).resolve().parent
 SAVE_DIR = APP_DIR.parent
 STATIC_DIR = APP_DIR / "static"
 BACKUP_DIR = APP_DIR / "backups"
+SIDECAR_DIR = APP_DIR / "sidecars"
+REPORT_DIR = APP_DIR / "reports"
 SCHEMA_DIR = APP_DIR / "schema"
 RECRUITING_SCHEMA_INDEX = SCHEMA_DIR / "recruiting_schema_index.json"
 FRANCHISE_HELPER = APP_DIR / "franchise_helper.js"
@@ -229,6 +231,2380 @@ RECRUIT_RATING_COLUMNS = [
     ("kick_accuracy", "KAC", "Kick Accuracy", "Kicking", 0, 99),
     ("kick_return", "KRT", "Kick Return", "Kicking", 0, 99),
 ]
+
+RECRUIT_RATING_SCHEMA_FIELDS = {
+    "overall": "OverallRating",
+    "speed": "SpeedRating",
+    "acceleration": "AccelerationRating",
+    "strength": "StrengthRating",
+    "agility": "AgilityRating",
+    "awareness": "AwarenessRating",
+    "jumping": "JumpingRating",
+    "injury": "InjuryRating",
+    "stamina": "StaminaRating",
+    "toughness": "ToughnessRating",
+    "carrying": "CarryingRating",
+    "break_tackle": "BreakTackleRating",
+    "trucking": "TruckingRating",
+    "change_of_direction": "ChangeOfDirectionRating",
+    "bc_vision": "BCVisionRating",
+    "stiff_arm": "StiffArmRating",
+    "spin_move": "SpinMoveRating",
+    "juke_move": "JukeMoveRating",
+    "break_sack": "BreakSackRating",
+    "run_block": "RunBlockRating",
+    "pass_block": "PassBlockRating",
+    "impact_blocking": "ImpactBlockingRating",
+    "run_block_power": "RunBlockPowerRating",
+    "run_block_finesse": "RunBlockFinesseRating",
+    "pass_block_power": "PassBlockPowerRating",
+    "pass_block_finesse": "PassBlockFinesseRating",
+    "lead_block": "LeadBlockRating",
+    "throw_power": "ThrowPowerRating",
+    "throw_under_pressure": "ThrowUnderPressureRating",
+    "throw_accuracy_short": "ThrowAccuracyShortRating",
+    "throw_accuracy_mid": "ThrowAccuracyMidRating",
+    "throw_accuracy_deep": "ThrowAccuracyDeepRating",
+    "throw_on_the_run": "ThrowOnTheRunRating",
+    "play_action": "PlayActionRating",
+    "tackle": "TackleRating",
+    "power_moves": "PowerMovesRating",
+    "finesse_moves": "FinesseMovesRating",
+    "block_shedding": "BlockSheddingRating",
+    "pursuit": "PursuitRating",
+    "play_recognition": "PlayRecognitionRating",
+    "man_coverage": "ManCoverageRating",
+    "zone_coverage": "ZoneCoverageRating",
+    "hit_power": "HitPowerRating",
+    "press": "PressRating",
+    "catching": "CatchingRating",
+    "spectacular_catch": "SpectacularCatchRating",
+    "catch_in_traffic": "CatchInTrafficRating",
+    "short_route_running": "ShortRouteRunningRating",
+    "medium_route_running": "MediumRouteRunningRating",
+    "deep_route_running": "DeepRouteRunningRating",
+    "kick_power": "KickPowerRating",
+    "kick_accuracy": "KickAccuracyRating",
+    "kick_return": "KickReturnRating",
+}
+
+FIELD_CAPABILITY_STATUSES = {
+    "writable",
+    "manual-writable",
+    "research",
+    "preserve",
+    "unsafe",
+}
+
+GENERATOR_STATE_BY_STATUS = {
+    "writable": "writable",
+    "manual-writable": "preview-only",
+    "research": "skipped because unverified",
+    "preserve": "skipped because unverified",
+    "unsafe": "blocked because unsafe",
+}
+
+BASE_FIELD_CAPABILITIES = [
+    {
+        "field": "Recruit.NationalRank",
+        "owner": "Recruit",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Already covered by structured recruit patch read-back tests.",
+    },
+    {
+        "field": "Recruit.PositionRank",
+        "owner": "Recruit",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Already covered by structured recruit patching.",
+    },
+    {
+        "field": "Recruit.StateRank",
+        "owner": "Recruit",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Writable as an existing rank field; home-state generation still requires RG-8.",
+    },
+    {
+        "field": "Player.FirstName",
+        "owner": "Player",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Structured Player string field with read-back coverage.",
+    },
+    {
+        "field": "Player.LastName",
+        "owner": "Player",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Structured Player string field with read-back coverage.",
+    },
+    {
+        "field": "Player.Position",
+        "owner": "Player",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Validated against known position enum values.",
+    },
+    {
+        "field": "Player.TraitDevelopment",
+        "owner": "Player",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Validated against known CFB development trait values.",
+    },
+    {
+        "field": "Player.RecruitingDealbreaker",
+        "owner": "Player",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Patch preserves raw bits after the first 4 motivation bits.",
+    },
+    {
+        "field": "Player.JerseyNum",
+        "owner": "Player",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Numeric range is validated before write.",
+    },
+    {
+        "field": "Player.Height",
+        "owner": "Player",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Stored and displayed in inches.",
+    },
+    {
+        "field": "Player.Weight",
+        "owner": "Player",
+        "status": "writable",
+        "gate": "RG-2",
+        "manualWritable": True,
+        "notes": "Storage is pounds minus 160; conversion is centralized in the patch helper.",
+    },
+    {
+        "field": "Player.ProspectStarRating",
+        "owner": "Player",
+        "status": "research",
+        "gate": "RG-3",
+        "notes": "Needs one-star through five-star mapping before writes.",
+    },
+    {
+        "field": "Player.PlayerType",
+        "owner": "Player",
+        "status": "research",
+        "gate": "RG-4",
+        "notes": "Displayed read-only until position-valid archetype map is verified.",
+    },
+    {
+        "field": "Player.CharacterBodyType",
+        "owner": "Player",
+        "status": "research",
+        "gate": "RG-5",
+        "notes": "Labels must be mapped to visual presets before generation.",
+    },
+    {
+        "field": "Recruit.QualityModifier",
+        "owner": "Recruit",
+        "status": "research",
+        "gate": "RG-6",
+        "notes": "Gem/bust/hidden behavior must be decoded before writes.",
+    },
+    {
+        "field": "Player.GenericHeadAssetName",
+        "owner": "Player",
+        "status": "research",
+        "gate": "RG-7",
+        "manualWritable": True,
+        "notes": "Manual editor can write the observed token, but generator must wait for paired appearance-token rules.",
+    },
+    {
+        "field": "Player.PLYR_PORTRAIT",
+        "owner": "Player",
+        "status": "research",
+        "gate": "RG-7",
+        "notes": "Must be paired with GenericHeadAssetName before generation.",
+    },
+    {
+        "field": "Player.PLYR_GENERICHEAD",
+        "owner": "Player",
+        "status": "research",
+        "gate": "RG-7",
+        "notes": "Observed related head token; preserve until appearance-token ownership is decoded.",
+    },
+    {
+        "field": "Player.HomeState",
+        "owner": "Player",
+        "status": "research",
+        "gate": "RG-8",
+        "notes": "Candidate ownership for state-rank generation; exact field must be proven from schema and saves.",
+    },
+    {
+        "field": "Recruit.ProductionGrade",
+        "owner": "Recruit",
+        "status": "preserve",
+        "gate": "RG-11",
+        "notes": "Recruiting presentation value; preserve until correlation and write tests exist.",
+    },
+    {
+        "field": "CharacterVisuals.RawData",
+        "owner": "Player",
+        "status": "preserve",
+        "gate": "RG-7",
+        "notes": "Raw visuals blob remains read-only until direct offsets are decoded.",
+    },
+]
+
+for index in range(1, 7):
+    BASE_FIELD_CAPABILITIES.append(
+        {
+            "field": f"Player.SkillGroupCap{index}",
+            "owner": "Player",
+            "status": "preserve",
+            "gate": "RG-9",
+            "notes": "Skill cap slots are preserved until slot mapping and value direction are confirmed.",
+        }
+    )
+
+for index in range(1, 6):
+    BASE_FIELD_CAPABILITIES.append(
+        {
+            "field": f"Player.PhysicalAbility{index}",
+            "owner": "Player",
+            "status": "preserve",
+            "gate": "RG-10",
+            "manualWritable": index <= 5,
+            "notes": "Manual editor writes rank slots only; generator ability identity/tier writes wait for RG-10.",
+        }
+    )
+
+for index in range(1, 4):
+    BASE_FIELD_CAPABILITIES.extend(
+        [
+            {
+                "field": f"Player.MentalAbility{index}",
+                "owner": "Player",
+                "status": "preserve",
+                "gate": "RG-10",
+                "manualWritable": True,
+                "notes": "Manual editor behavior exists; generator ability ecosystem writes wait for RG-10.",
+            },
+            {
+                "field": f"Player.MentalAbilityRank{index}",
+                "owner": "Player",
+                "status": "preserve",
+                "gate": "RG-10",
+                "manualWritable": True,
+                "notes": "Manual editor behavior exists; generator ability ecosystem writes wait for RG-10.",
+            },
+        ]
+    )
+
+RECRUIT_PATCH_FIELD_CAPABILITY_MAP = {
+    "national_rank": "Recruit.NationalRank",
+    "position_rank": "Recruit.PositionRank",
+    "state_rank": "Recruit.StateRank",
+    "first_name": "Player.FirstName",
+    "last_name": "Player.LastName",
+    "position": "Player.Position",
+    "dev_trait": "Player.TraitDevelopment",
+    "dealbreaker": "Player.RecruitingDealbreaker",
+    "jersey_number": "Player.JerseyNum",
+    "height_inches": "Player.Height",
+    "weight_lbs": "Player.Weight",
+    "prospect_star_rating": "Player.ProspectStarRating",
+    "player_type": "Player.PlayerType",
+    "character_body_type": "Player.CharacterBodyType",
+    "quality_modifier": "Recruit.QualityModifier",
+    "home_state": "Player.HomeState",
+    "generic_head_asset_name": "Player.GenericHeadAssetName",
+    "mental_ability_1": "Player.MentalAbility1",
+    "mental_ability_2": "Player.MentalAbility2",
+    "mental_ability_3": "Player.MentalAbility3",
+    "mental_rank_1": "Player.MentalAbilityRank1",
+    "mental_rank_2": "Player.MentalAbilityRank2",
+    "mental_rank_3": "Player.MentalAbilityRank3",
+    "physical_rank_1": "Player.PhysicalAbility1",
+    "physical_rank_2": "Player.PhysicalAbility2",
+    "physical_rank_3": "Player.PhysicalAbility3",
+    "physical_rank_4": "Player.PhysicalAbility4",
+    "physical_rank_5": "Player.PhysicalAbility5",
+    **{
+        key: f"Player.{schema_field}"
+        for key, schema_field in RECRUIT_RATING_SCHEMA_FIELDS.items()
+    },
+}
+
+
+def normalize_field_capability(item: dict) -> dict:
+    status = item.get("status", "research")
+    if status not in FIELD_CAPABILITY_STATUSES:
+        raise AppError(f"Invalid field capability status: {status}", 500)
+    safe_to_write = bool(item.get("safeToWrite", status == "writable"))
+    normalized = {
+        "field": item["field"],
+        "owner": item.get("owner", item["field"].split(".", 1)[0]),
+        "status": status,
+        "generatorState": GENERATOR_STATE_BY_STATUS[status],
+        "safeToWrite": safe_to_write,
+    }
+    for key in ("gate", "manualWritable", "notes"):
+        if key in item:
+            normalized[key] = item[key]
+    return normalized
+
+
+def field_capabilities() -> dict:
+    fields = [normalize_field_capability(item) for item in BASE_FIELD_CAPABILITIES]
+    for key, _, label, _, _, _ in RECRUIT_RATING_COLUMNS:
+        schema_field = RECRUIT_RATING_SCHEMA_FIELDS[key]
+        fields.append(
+            normalize_field_capability(
+                {
+                    "field": f"Player.{schema_field}",
+                    "owner": "Player",
+                    "status": "writable",
+                    "gate": "RG-2",
+                    "manualWritable": True,
+                    "notes": f"Verified rating field exposed as {label}.",
+                }
+            )
+        )
+    return {
+        "fields": fields,
+        "statuses": sorted(FIELD_CAPABILITY_STATUSES),
+        "generatorStates": sorted(set(GENERATOR_STATE_BY_STATUS.values())),
+    }
+
+
+def validate_recruit_patch_capabilities(changes: dict, mode: str = "manual") -> None:
+    if mode not in {"manual", "generator"}:
+        raise AppError(f"Unsupported recruit patch mode: {mode}", 400)
+    if mode != "generator":
+        return
+    capability_by_field = {item["field"]: item for item in field_capabilities()["fields"]}
+    blocked: list[str] = []
+    unknown: list[str] = []
+    for key in changes:
+        field = RECRUIT_PATCH_FIELD_CAPABILITY_MAP.get(key)
+        if not field:
+            unknown.append(key)
+            continue
+        capability = capability_by_field.get(field)
+        if not capability or not capability["safeToWrite"]:
+            blocked.append(f"{key} ({field})")
+    if unknown:
+        raise AppError(f"Unsupported generator fields: {', '.join(sorted(unknown))}", 403)
+    if blocked:
+        raise AppError(
+            "Generator cannot write research-gated fields: "
+            + ", ".join(sorted(blocked)),
+            403,
+        )
+
+
+CONFIG_VERSION = 1
+STABLE_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+STAR_CUTOFF_KEYS = {"FIVE_STAR", "FOUR_STAR", "THREE_STAR", "TWO_STAR", "ONE_STAR"}
+DEVELOPMENT_TRAIT_KEYS = {item["value"] for item in DEVELOPMENT_TRAIT_OPTIONS}
+QUALITY_MODIFIER_KEYS = {"Gem", "Bust"}
+
+DEFAULT_POSITION_WEIGHTS = {
+    "QB": 0.06,
+    "HB": 0.09,
+    "FB": 0.01,
+    "WR": 0.14,
+    "TE": 0.06,
+    "LT": 0.045,
+    "LG": 0.04,
+    "C": 0.035,
+    "RG": 0.04,
+    "RT": 0.045,
+    "LE": 0.045,
+    "RE": 0.045,
+    "DT": 0.075,
+    "LOLB": 0.04,
+    "MLB": 0.045,
+    "ROLB": 0.04,
+    "CB": 0.11,
+    "FS": 0.04,
+    "SS": 0.04,
+    "K": 0.015,
+    "P": 0.01,
+}
+
+POSITION_ARCHETYPE_PREFIXES = {
+    "QB": ("QB_",),
+    "HB": ("HB_",),
+    "FB": ("FB_",),
+    "WR": ("WR_",),
+    "TE": ("TE_",),
+    "LT": ("OL_",),
+    "LG": ("OL_",),
+    "C": ("OL_",),
+    "RG": ("OL_",),
+    "RT": ("OL_",),
+    "LE": ("DL_", "EDGE_"),
+    "RE": ("DL_", "EDGE_"),
+    "DT": ("DL_",),
+    "LOLB": ("LB_", "EDGE_"),
+    "MLB": ("LB_",),
+    "ROLB": ("LB_", "EDGE_"),
+    "CB": ("CB_",),
+    "FS": ("S_",),
+    "SS": ("S_",),
+    "K": ("K_",),
+    "P": ("P_",),
+    "LS": ("OL_",),
+    "KR": ("WR_", "HB_", "CB_"),
+    "PR": ("WR_", "HB_", "CB_"),
+}
+
+DEFAULT_GENERATOR_CONFIG = {
+    "configVersion": CONFIG_VERSION,
+    "id": "manifesto-realistic-v1",
+    "name": "Manifesto Realistic V1",
+    "game": "CFB27",
+    "generator": {
+        "mode": "reroll-existing-recruits",
+        "writePolicy": "verified-fields-only",
+    },
+    "classBudget": {
+        "useExistingRecruitCount": True,
+        "fiveStarCount": 32,
+        "fourStarCount": 368,
+        "generationalFreshmanCount": {"min": 0, "max": 2},
+        "eliteDevelopmentCount": {"min": 5, "max": 12},
+        "platinumPhysicalAbilityCount": {"min": 0, "max": 3},
+        "classStrengthModifier": {"min": -1.0, "max": 1.0},
+        "positionWeights": DEFAULT_POSITION_WEIGHTS,
+    },
+    "rankBands": [
+        {
+            "id": "rank-1-5",
+            "minRank": 1,
+            "maxRank": 5,
+            "expectedOverall": {"min": 85, "max": 87},
+            "typicalOverall": {"min": 83, "max": 88},
+            "rareMaxOverall": 90,
+        },
+        {
+            "id": "rank-6-32",
+            "minRank": 6,
+            "maxRank": 32,
+            "expectedOverall": {"min": 81, "max": 85},
+            "typicalOverall": {"min": 79, "max": 86},
+            "rareMaxOverall": 88,
+        },
+        {
+            "id": "rank-33-100",
+            "minRank": 33,
+            "maxRank": 100,
+            "expectedOverall": {"min": 77, "max": 82},
+            "typicalOverall": {"min": 75, "max": 84},
+            "rareMaxOverall": 86,
+        },
+        {
+            "id": "rank-101-400",
+            "minRank": 101,
+            "maxRank": 400,
+            "expectedOverall": {"min": 73, "max": 79},
+            "typicalOverall": {"min": 70, "max": 82},
+            "rareMaxOverall": 84,
+        },
+        {
+            "id": "rank-401-1500",
+            "minRank": 401,
+            "maxRank": 1500,
+            "expectedOverall": {"min": 66, "max": 74},
+            "typicalOverall": {"min": 62, "max": 78},
+            "rareMaxOverall": 81,
+        },
+        {
+            "id": "rank-1501-3000",
+            "minRank": 1501,
+            "maxRank": 3000,
+            "expectedOverall": {"min": 58, "max": 68},
+            "typicalOverall": {"min": 54, "max": 72},
+            "rareMaxOverall": 76,
+        },
+        {
+            "id": "rank-3001-plus",
+            "minRank": 3001,
+            "maxRank": None,
+            "expectedOverall": {"min": 52, "max": 62},
+            "typicalOverall": {"min": 48, "max": 67},
+            "rareMaxOverall": 72,
+        },
+    ],
+    "starCutoffs": {
+        "FIVE_STAR": {"minRank": 1, "maxRank": 32},
+        "FOUR_STAR": {"minRank": 33, "maxRank": 400},
+        "THREE_STAR": {"minRank": 401, "maxRank": 1500},
+        "TWO_STAR": {"minRank": 1501, "maxRank": 3000},
+        "ONE_STAR": {"minRank": 3001, "maxRank": None},
+    },
+    "profileTypes": {
+        "CompleteProdigy": {
+            "rankBandWeights": {
+                "rank-1-5": 0.28,
+                "rank-6-32": 0.12,
+                "rank-33-100": 0.04,
+            },
+            "readiness": {"min": 0.82, "max": 0.98},
+            "physical": {"min": 0.75, "max": 0.96},
+            "technical": {"min": 0.78, "max": 0.96},
+            "mental": {"min": 0.72, "max": 0.95},
+            "ceiling": {"min": 0.72, "max": 0.9},
+        },
+        "BlueChipBalanced": {
+            "rankBandWeights": {
+                "rank-1-5": 0.35,
+                "rank-6-32": 0.42,
+                "rank-33-100": 0.34,
+                "rank-101-400": 0.18,
+            },
+            "readiness": {"min": 0.7, "max": 0.88},
+            "physical": {"min": 0.66, "max": 0.9},
+            "technical": {"min": 0.64, "max": 0.88},
+            "mental": {"min": 0.58, "max": 0.86},
+            "ceiling": {"min": 0.66, "max": 0.88},
+        },
+        "RarePhysicalFreak": {
+            "rankBandWeights": {
+                "rank-1-5": 0.18,
+                "rank-6-32": 0.2,
+                "rank-33-100": 0.18,
+                "rank-101-400": 0.12,
+                "rank-401-1500": 0.04,
+            },
+            "readiness": {"min": 0.55, "max": 0.82},
+            "physical": {"min": 0.86, "max": 0.99},
+            "technical": {"min": 0.45, "max": 0.74},
+            "mental": {"min": 0.44, "max": 0.72},
+            "ceiling": {"min": 0.74, "max": 0.94},
+        },
+        "PolishedTechnician": {
+            "rankBandWeights": {
+                "rank-6-32": 0.12,
+                "rank-33-100": 0.22,
+                "rank-101-400": 0.26,
+                "rank-401-1500": 0.2,
+            },
+            "readiness": {"min": 0.66, "max": 0.88},
+            "physical": {"min": 0.5, "max": 0.78},
+            "technical": {"min": 0.75, "max": 0.94},
+            "mental": {"min": 0.68, "max": 0.92},
+            "ceiling": {"min": 0.52, "max": 0.78},
+        },
+        "Developmental": {
+            "rankBandWeights": {
+                "rank-101-400": 0.44,
+                "rank-401-1500": 0.76,
+                "rank-1501-3000": 0.84,
+                "rank-3001-plus": 1.0,
+            },
+            "readiness": {"min": 0.35, "max": 0.68},
+            "physical": {"min": 0.38, "max": 0.8},
+            "technical": {"min": 0.32, "max": 0.7},
+            "mental": {"min": 0.34, "max": 0.74},
+            "ceiling": {"min": 0.42, "max": 0.82},
+        },
+    },
+    "positionProfiles": {
+        "QB": {"archetypeWeights": {"QB_FieldGeneral": 0.72, "QB_Scrambler": 0.28}, "bodyRule": "QB"},
+        "HB": {"archetypeWeights": {"HB_ElusiveBack": 0.45, "HB_PowerBack": 0.35, "HB_ReceivingBack": 0.2}, "bodyRule": "HB"},
+        "FB": {"archetypeWeights": {"FB_Blocking": 0.64, "FB_Power": 0.36}, "bodyRule": "FB"},
+        "WR": {"archetypeWeights": {"WR_DeepThreat": 0.34, "WR_Playmaker": 0.28, "WR_Physical": 0.24, "WR_Slot": 0.14}, "bodyRule": "WR"},
+        "TE": {"archetypeWeights": {"TE_Possession": 0.45, "TE_VerticalThreat": 0.34, "TE_Blocking": 0.21}, "bodyRule": "TE"},
+        "LT": {"archetypeWeights": {"OL_PassProtector": 0.58, "OL_RunBlocker": 0.42}, "bodyRule": "OL"},
+        "LG": {"archetypeWeights": {"OL_RunBlocker": 0.58, "OL_PassProtector": 0.42}, "bodyRule": "OL"},
+        "C": {"archetypeWeights": {"OL_RunBlocker": 0.52, "OL_PassProtector": 0.48}, "bodyRule": "OL"},
+        "RG": {"archetypeWeights": {"OL_RunBlocker": 0.58, "OL_PassProtector": 0.42}, "bodyRule": "OL"},
+        "RT": {"archetypeWeights": {"OL_PassProtector": 0.54, "OL_RunBlocker": 0.46}, "bodyRule": "OL"},
+        "LE": {"archetypeWeights": {"EDGE_SpeedRusher": 0.42, "EDGE_PowerRusher": 0.36, "DL_RunStopper": 0.22}, "bodyRule": "DL"},
+        "RE": {"archetypeWeights": {"EDGE_SpeedRusher": 0.42, "EDGE_PowerRusher": 0.36, "DL_RunStopper": 0.22}, "bodyRule": "DL"},
+        "DT": {"archetypeWeights": {"DL_RunStopper": 0.56, "DL_PowerRusher": 0.44}, "bodyRule": "DL"},
+        "LOLB": {"archetypeWeights": {"LB_RunStopper": 0.36, "LB_Coverage": 0.32, "EDGE_SpeedRusher": 0.32}, "bodyRule": "LB"},
+        "MLB": {"archetypeWeights": {"LB_FieldGeneral": 0.44, "LB_RunStopper": 0.36, "LB_Coverage": 0.2}, "bodyRule": "LB"},
+        "ROLB": {"archetypeWeights": {"LB_RunStopper": 0.36, "LB_Coverage": 0.32, "EDGE_SpeedRusher": 0.32}, "bodyRule": "LB"},
+        "CB": {"archetypeWeights": {"CB_MantoMan": 0.55, "CB_Zone": 0.45}, "bodyRule": "CB"},
+        "FS": {"archetypeWeights": {"S_Zone": 0.6, "S_Hybrid": 0.4}, "bodyRule": "S"},
+        "SS": {"archetypeWeights": {"S_RunSupport": 0.5, "S_Hybrid": 0.3, "S_Zone": 0.2}, "bodyRule": "S"},
+        "K": {"archetypeWeights": {"K_PlaceKicker": 1.0}, "bodyRule": "K"},
+        "P": {"archetypeWeights": {"P_Punter": 1.0}, "bodyRule": "P"},
+    },
+    "archetypeProfiles": {
+        "QB_FieldGeneral": {"primaryRatings": ["throw_power", "throw_accuracy_short", "throw_accuracy_mid", "awareness"]},
+        "QB_Scrambler": {"primaryRatings": ["throw_on_the_run", "speed", "throw_power", "break_sack"]},
+        "HB_ElusiveBack": {"primaryRatings": ["speed", "acceleration", "change_of_direction", "juke_move"]},
+        "HB_PowerBack": {"primaryRatings": ["strength", "carrying", "break_tackle", "trucking"]},
+        "HB_ReceivingBack": {"primaryRatings": ["speed", "catching", "short_route_running", "carrying"]},
+        "FB_Blocking": {"primaryRatings": ["lead_block", "impact_blocking", "strength", "run_block"]},
+        "FB_Power": {"primaryRatings": ["lead_block", "carrying", "break_tackle", "run_block"]},
+        "WR_DeepThreat": {"primaryRatings": ["speed", "acceleration", "deep_route_running", "catching"]},
+        "WR_Playmaker": {"primaryRatings": ["catching", "change_of_direction", "juke_move", "medium_route_running"]},
+        "WR_Physical": {"primaryRatings": ["catching", "catch_in_traffic", "strength", "spectacular_catch"]},
+        "WR_Slot": {"primaryRatings": ["short_route_running", "catching", "change_of_direction", "catch_in_traffic"]},
+        "TE_Blocking": {"primaryRatings": ["run_block", "impact_blocking", "strength", "pass_block"]},
+        "TE_VerticalThreat": {"primaryRatings": ["speed", "catching", "medium_route_running", "catch_in_traffic"]},
+        "TE_Possession": {"primaryRatings": ["catching", "catch_in_traffic", "short_route_running", "strength"]},
+        "OL_PassProtector": {"primaryRatings": ["pass_block", "pass_block_power", "pass_block_finesse", "strength"]},
+        "OL_RunBlocker": {"primaryRatings": ["run_block", "run_block_power", "impact_blocking", "strength"]},
+        "DL_RunStopper": {"primaryRatings": ["block_shedding", "strength", "tackle", "pursuit"]},
+        "DL_PowerRusher": {"primaryRatings": ["power_moves", "block_shedding", "strength", "pursuit"]},
+        "EDGE_SpeedRusher": {"primaryRatings": ["finesse_moves", "speed", "pursuit", "tackle"]},
+        "EDGE_PowerRusher": {"primaryRatings": ["power_moves", "block_shedding", "strength", "tackle"]},
+        "LB_RunStopper": {"primaryRatings": ["tackle", "block_shedding", "pursuit", "hit_power"]},
+        "LB_Coverage": {"primaryRatings": ["zone_coverage", "play_recognition", "speed", "tackle"]},
+        "LB_FieldGeneral": {"primaryRatings": ["play_recognition", "tackle", "pursuit", "zone_coverage"]},
+        "CB_MantoMan": {"primaryRatings": ["speed", "man_coverage", "press", "acceleration"]},
+        "CB_Zone": {"primaryRatings": ["zone_coverage", "play_recognition", "speed", "tackle"]},
+        "S_RunSupport": {"primaryRatings": ["tackle", "hit_power", "pursuit", "zone_coverage"]},
+        "S_Hybrid": {"primaryRatings": ["speed", "zone_coverage", "man_coverage", "tackle"]},
+        "S_Zone": {"primaryRatings": ["zone_coverage", "play_recognition", "speed", "tackle"]},
+        "K_PlaceKicker": {"primaryRatings": ["kick_power", "kick_accuracy", "awareness"]},
+        "P_Punter": {"primaryRatings": ["kick_power", "kick_accuracy", "awareness"]},
+    },
+    "bodyRules": {
+        "QB": {"heightInches": {"min": 72, "max": 78}, "weightLbs": {"min": 195, "max": 235}},
+        "HB": {"heightInches": {"min": 67, "max": 74}, "weightLbs": {"min": 185, "max": 230}},
+        "FB": {"heightInches": {"min": 70, "max": 75}, "weightLbs": {"min": 225, "max": 260}},
+        "WR": {"heightInches": {"min": 68, "max": 78}, "weightLbs": {"min": 170, "max": 225}},
+        "TE": {"heightInches": {"min": 75, "max": 80}, "weightLbs": {"min": 230, "max": 270}},
+        "CB": {"heightInches": {"min": 68, "max": 75}, "weightLbs": {"min": 170, "max": 205}},
+        "S": {"heightInches": {"min": 70, "max": 76}, "weightLbs": {"min": 185, "max": 220}},
+        "OL": {"heightInches": {"min": 74, "max": 80}, "weightLbs": {"min": 285, "max": 360}},
+        "DL": {"heightInches": {"min": 72, "max": 79}, "weightLbs": {"min": 245, "max": 335}},
+        "LB": {"heightInches": {"min": 72, "max": 77}, "weightLbs": {"min": 220, "max": 255}},
+        "K": {"heightInches": {"min": 68, "max": 76}, "weightLbs": {"min": 165, "max": 215}},
+        "P": {"heightInches": {"min": 70, "max": 78}, "weightLbs": {"min": 175, "max": 225}},
+    },
+    "development": {
+        "traitWeights": {
+            "Normal": 0.72,
+            "College_Impact": 0.21,
+            "College_Star": 0.06,
+            "College_Elite": 0.01,
+        },
+        "rankBandMultipliers": {
+            "rank-1-5": 3.0,
+            "rank-6-32": 2.0,
+            "rank-33-100": 1.5,
+            "rank-101-400": 1.1,
+        },
+    },
+    "qualityModifier": {
+        "budgets": {
+            "Gem": {"min": 20, "max": 55},
+            "Bust": {"min": 20, "max": 55},
+        },
+        "writeBehavior": "preview-only-until-rg6",
+    },
+    "validation": {
+        "overallTolerance": 2,
+        "maxRareOverallCount": 3,
+        "requireRankBandCoverage": True,
+        "blockResearchGatedWrites": True,
+    },
+    "writeFields": {
+        "ranks": True,
+        "ratings": True,
+        "identity": True,
+        "body": True,
+        "developmentTrait": True,
+        "starRating": "after-research",
+        "archetype": "after-research",
+        "bodyType": "after-research",
+        "qualityModifier": "after-research",
+        "abilities": False,
+        "skillCaps": False,
+    },
+}
+
+CONFIG_REQUIRED_TOP_LEVEL_KEYS = {
+    "configVersion",
+    "id",
+    "name",
+    "game",
+    "generator",
+    "classBudget",
+    "rankBands",
+    "starCutoffs",
+    "profileTypes",
+    "positionProfiles",
+    "archetypeProfiles",
+    "bodyRules",
+    "development",
+    "qualityModifier",
+    "validation",
+}
+
+CONFIG_WRITE_FIELD_GROUPS = {
+    "ranks": ["Recruit.NationalRank", "Recruit.PositionRank", "Recruit.StateRank"],
+    "ratings": [f"Player.{schema_field}" for schema_field in RECRUIT_RATING_SCHEMA_FIELDS.values()],
+    "identity": ["Player.FirstName", "Player.LastName", "Player.Position"],
+    "body": ["Player.Height", "Player.Weight"],
+    "developmentTrait": ["Player.TraitDevelopment"],
+    "starRating": ["Player.ProspectStarRating"],
+    "archetype": ["Player.PlayerType"],
+    "bodyType": ["Player.CharacterBodyType"],
+    "qualityModifier": ["Recruit.QualityModifier"],
+    "abilities": [
+        *[f"Player.PhysicalAbility{index}" for index in range(1, 6)],
+        *[f"Player.MentalAbility{index}" for index in range(1, 4)],
+        *[f"Player.MentalAbilityRank{index}" for index in range(1, 4)],
+    ],
+    "skillCaps": [f"Player.SkillGroupCap{index}" for index in range(1, 7)],
+}
+
+
+def clone_json(value: object) -> object:
+    return json.loads(json.dumps(value))
+
+
+def deep_merge_config(base: object, override: object) -> object:
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for key, value in override.items():
+            merged[key] = deep_merge_config(merged.get(key), value)
+        return merged
+    return clone_json(override)
+
+
+def migrate_generator_config(config: dict) -> tuple[dict, list[str], list[str]]:
+    version = config.get("configVersion")
+    warnings: list[str] = []
+    errors: list[str] = []
+    if version == CONFIG_VERSION:
+        return clone_json(config), warnings, errors
+    if version is None or version == 0:
+        migrated = deep_merge_config(DEFAULT_GENERATOR_CONFIG, config)
+        if isinstance(migrated, dict):
+            migrated["configVersion"] = CONFIG_VERSION
+            class_budget = config.get("classBudget")
+            if isinstance(class_budget, dict) and isinstance(class_budget.get("positionWeights"), dict):
+                migrated.setdefault("classBudget", {})["positionWeights"] = clone_json(class_budget["positionWeights"])
+        source_version = "missing" if version is None else "0"
+        warnings.append(
+            f"Migrated configVersion {source_version} to {CONFIG_VERSION}; missing v1 sections were filled from the built-in default"
+        )
+        return migrated, warnings, errors
+    if isinstance(version, int) and version > CONFIG_VERSION:
+        errors.append(
+            f"Unsupported future configVersion {version}; this editor supports {CONFIG_VERSION}. "
+            "Export this config from a compatible editor or add a migration before importing it."
+        )
+        return clone_json(config), warnings, errors
+    errors.append(f"Unsupported configVersion {version}; no migration is available")
+    return clone_json(config), warnings, errors
+
+
+def clean_config_id(value: object, path: str, errors: list[str]) -> str:
+    text = str(value or "").strip()
+    if not STABLE_ID_PATTERN.match(text):
+        errors.append(f"{path} must be a stable id using letters, numbers, underscores, or hyphens")
+    return text
+
+
+def numeric_range(value: object, path: str, errors: list[str]) -> dict:
+    if not isinstance(value, dict):
+        errors.append(f"{path} must be an object with min and max")
+        return {"min": 0, "max": 0}
+    minimum = value.get("min")
+    maximum = value.get("max")
+    if not isinstance(minimum, (int, float)) or not isinstance(maximum, (int, float)):
+        errors.append(f"{path}.min and {path}.max must be numeric")
+        return {"min": minimum, "max": maximum}
+    if minimum > maximum:
+        errors.append(f"{path}.min cannot be greater than {path}.max")
+    return {"min": minimum, "max": maximum}
+
+
+def count_range(value: object, path: str, errors: list[str]) -> dict:
+    normalized = numeric_range(value, path, errors)
+    minimum = normalized.get("min")
+    maximum = normalized.get("max")
+    if not isinstance(minimum, int) or not isinstance(maximum, int):
+        errors.append(f"{path}.min and {path}.max must be integer counts")
+    elif minimum < 0 or maximum < 0:
+        errors.append(f"{path}.min and {path}.max must be non-negative counts")
+    return normalized
+
+
+def normalize_probability_map(value: object, path: str, errors: list[str]) -> dict:
+    if not isinstance(value, dict):
+        errors.append(f"{path} must be a probability map")
+        return {}
+    cleaned: dict[str, float] = {}
+    total = 0.0
+    for key, raw_weight in value.items():
+        if not isinstance(raw_weight, (int, float)) or raw_weight < 0:
+            errors.append(f"{path}.{key} must be a non-negative number")
+            continue
+        cleaned[str(key)] = float(raw_weight)
+        total += float(raw_weight)
+    if total <= 0:
+        errors.append(f"{path} must contain at least one positive weight")
+        return cleaned
+    return {key: round(weight / total, 6) for key, weight in cleaned.items()}
+
+
+def validate_rank_intervals(
+    items: list[tuple[str, int, int | None]],
+    path: str,
+    errors: list[str],
+    require_start_at_one: bool = False,
+) -> None:
+    intervals = sorted(items, key=lambda item: item[1])
+    previous_end: int | None = None
+    for item_id, minimum, maximum in intervals:
+        if minimum < 1:
+            errors.append(f"{path}.{item_id}.minRank must be at least 1")
+        if maximum is not None and maximum < minimum:
+            errors.append(f"{path}.{item_id}.maxRank cannot be less than minRank")
+        if previous_end is not None and minimum <= previous_end:
+            errors.append(f"{path}.{item_id} overlaps a previous rank interval")
+        if previous_end is not None and minimum > previous_end + 1:
+            errors.append(f"{path}.{item_id} leaves a rank gap after {previous_end}")
+        previous_end = maximum
+        if maximum is None:
+            break
+    if require_start_at_one and intervals and intervals[0][1] != 1:
+        errors.append(f"{path} must start at rank 1")
+
+
+def normalize_rank_bands(value: object, errors: list[str]) -> tuple[list[dict], set[str]]:
+    if not isinstance(value, list) or not value:
+        errors.append("rankBands must be a non-empty array")
+        return [], set()
+    normalized = []
+    intervals = []
+    ids: set[str] = set()
+    for index, item in enumerate(value):
+        path = f"rankBands[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{path} must be an object")
+            continue
+        band_id = clean_config_id(item.get("id"), f"{path}.id", errors)
+        if band_id in ids:
+            errors.append(f"{path}.id is duplicated")
+        ids.add(band_id)
+        minimum = item.get("minRank")
+        maximum = item.get("maxRank")
+        if not isinstance(minimum, int):
+            errors.append(f"{path}.minRank must be an integer")
+            minimum = 1
+        if maximum is not None and not isinstance(maximum, int):
+            errors.append(f"{path}.maxRank must be an integer or null")
+            maximum = minimum
+        normalized_item = {**item, "id": band_id, "minRank": minimum, "maxRank": maximum}
+        for range_key in ("expectedOverall", "typicalOverall"):
+            if range_key in item:
+                normalized_item[range_key] = numeric_range(item[range_key], f"{path}.{range_key}", errors)
+        if "rareMaxOverall" in item and not isinstance(item["rareMaxOverall"], int):
+            errors.append(f"{path}.rareMaxOverall must be an integer")
+        normalized.append(normalized_item)
+        intervals.append((band_id, minimum, maximum))
+    validate_rank_intervals(intervals, "rankBands", errors)
+    return normalized, ids
+
+
+def normalize_star_cutoffs(value: object, errors: list[str]) -> dict:
+    if not isinstance(value, dict):
+        errors.append("starCutoffs must be an object")
+        return {}
+    missing = STAR_CUTOFF_KEYS - set(value)
+    if missing:
+        errors.append(f"starCutoffs is missing: {', '.join(sorted(missing))}")
+    normalized = {}
+    intervals = []
+    for key, item in value.items():
+        if key not in STAR_CUTOFF_KEYS:
+            errors.append(f"starCutoffs.{key} is not a known star cutoff")
+        if not isinstance(item, dict):
+            errors.append(f"starCutoffs.{key} must be an object")
+            continue
+        minimum = item.get("minRank")
+        maximum = item.get("maxRank")
+        if not isinstance(minimum, int):
+            errors.append(f"starCutoffs.{key}.minRank must be an integer")
+            minimum = 1
+        if maximum is not None and not isinstance(maximum, int):
+            errors.append(f"starCutoffs.{key}.maxRank must be an integer or null")
+            maximum = minimum
+        normalized[key] = {"minRank": minimum, "maxRank": maximum}
+        intervals.append((key, minimum, maximum))
+    validate_rank_intervals(intervals, "starCutoffs", errors, require_start_at_one=True)
+    return normalized
+
+
+def normalize_class_budget(value: object, errors: list[str]) -> dict:
+    if not isinstance(value, dict):
+        errors.append("classBudget must be an object")
+        return {}
+    normalized = dict(value)
+    position_weights = normalize_probability_map(
+        value.get("positionWeights", {}),
+        "classBudget.positionWeights",
+        errors,
+    )
+    for position in position_weights:
+        if position not in RECRUIT_POSITION_OPTIONS:
+            errors.append(f"classBudget.positionWeights.{position} is not a known position")
+    normalized["positionWeights"] = position_weights
+    for key in ("fiveStarCount", "fourStarCount"):
+        if key in value and (not isinstance(value[key], int) or value[key] < 0):
+            errors.append(f"classBudget.{key} must be a non-negative integer")
+    if "useExistingRecruitCount" in value and not isinstance(value["useExistingRecruitCount"], bool):
+        errors.append("classBudget.useExistingRecruitCount must be true or false")
+    for key in ("generationalFreshmanCount", "eliteDevelopmentCount", "platinumPhysicalAbilityCount"):
+        if key in value:
+            normalized[key] = count_range(value[key], f"classBudget.{key}", errors)
+    if "classStrengthModifier" in value:
+        normalized["classStrengthModifier"] = numeric_range(
+            value["classStrengthModifier"],
+            "classBudget.classStrengthModifier",
+            errors,
+        )
+    return normalized
+
+
+def rank_interval_size(item: dict) -> int | None:
+    minimum = item.get("minRank")
+    maximum = item.get("maxRank")
+    if not isinstance(minimum, int) or not isinstance(maximum, int):
+        return None
+    return maximum - minimum + 1
+
+
+def compare_class_budget_to_star_cutoffs(class_budget: dict, star_cutoffs: dict, warnings: list[str]) -> None:
+    comparisons = [
+        ("fiveStarCount", "FIVE_STAR"),
+        ("fourStarCount", "FOUR_STAR"),
+    ]
+    for budget_key, cutoff_key in comparisons:
+        budget_value = class_budget.get(budget_key)
+        cutoff_size = rank_interval_size(star_cutoffs.get(cutoff_key, {}))
+        if isinstance(budget_value, int) and cutoff_size is not None and budget_value != cutoff_size:
+            warnings.append(
+                f"classBudget.{budget_key} is {budget_value}, but starCutoffs.{cutoff_key} covers {cutoff_size} ranks"
+            )
+
+
+def validate_budget_recruit_count(
+    class_budget: dict,
+    quality_modifier: dict,
+    recruit_count: int | None,
+    errors: list[str],
+) -> None:
+    if recruit_count is None:
+        return
+    star_budget_total = 0
+    for key in ("fiveStarCount", "fourStarCount"):
+        value = class_budget.get(key)
+        if isinstance(value, int):
+            star_budget_total += value
+            if value > recruit_count:
+                errors.append(f"classBudget.{key} cannot exceed recruitCount {recruit_count}")
+    if star_budget_total > recruit_count:
+        errors.append(
+            f"classBudget five-star plus four-star total {star_budget_total} cannot exceed recruitCount {recruit_count}"
+        )
+
+    for key in ("generationalFreshmanCount", "eliteDevelopmentCount", "platinumPhysicalAbilityCount"):
+        item = class_budget.get(key)
+        if isinstance(item, dict):
+            maximum = item.get("max")
+            if isinstance(maximum, int) and maximum > recruit_count:
+                errors.append(f"classBudget.{key}.max cannot exceed recruitCount {recruit_count}")
+
+    quality_budgets = quality_modifier.get("budgets", {}) if isinstance(quality_modifier, dict) else {}
+    quality_min_total = 0
+    quality_max_total = 0
+    for key, item in quality_budgets.items():
+        if not isinstance(item, dict):
+            continue
+        minimum = item.get("min")
+        maximum = item.get("max")
+        if isinstance(minimum, int):
+            quality_min_total += minimum
+            if minimum > recruit_count:
+                errors.append(f"qualityModifier.budgets.{key}.min cannot exceed recruitCount {recruit_count}")
+        if isinstance(maximum, int):
+            quality_max_total += maximum
+            if maximum > recruit_count:
+                errors.append(f"qualityModifier.budgets.{key}.max cannot exceed recruitCount {recruit_count}")
+    if quality_min_total > recruit_count:
+        errors.append(
+            f"qualityModifier minimum budget total {quality_min_total} cannot exceed recruitCount {recruit_count}"
+        )
+    if quality_max_total > recruit_count:
+        errors.append(
+            f"qualityModifier maximum budget total {quality_max_total} cannot exceed recruitCount {recruit_count}"
+        )
+
+
+def normalize_profile_types(value: object, rank_band_ids: set[str], errors: list[str]) -> dict:
+    if not isinstance(value, dict) or not value:
+        errors.append("profileTypes must be a non-empty object")
+        return {}
+    normalized = {}
+    for key, item in value.items():
+        profile_id = clean_config_id(key, f"profileTypes.{key}", errors)
+        if not isinstance(item, dict):
+            errors.append(f"profileTypes.{key} must be an object")
+            continue
+        normalized_item = dict(item)
+        weights = normalize_probability_map(
+            item.get("rankBandWeights", {}),
+            f"profileTypes.{key}.rankBandWeights",
+            errors,
+        )
+        for band_id in weights:
+            if band_id not in rank_band_ids:
+                errors.append(f"profileTypes.{key}.rankBandWeights.{band_id} does not match a rank band")
+        normalized_item["rankBandWeights"] = weights
+        for range_key in ("readiness", "physical", "technical", "mental", "ceiling"):
+            if range_key in item:
+                normalized_item[range_key] = numeric_range(
+                    item[range_key],
+                    f"profileTypes.{key}.{range_key}",
+                    errors,
+                )
+        normalized[profile_id] = normalized_item
+    return normalized
+
+
+def validate_profile_type_coverage(profile_types: dict, rank_band_ids: set[str], errors: list[str]) -> None:
+    covered = set()
+    for item in profile_types.values():
+        for band_id, weight in item.get("rankBandWeights", {}).items():
+            if weight > 0:
+                covered.add(band_id)
+    missing = sorted(rank_band_ids - covered)
+    if missing:
+        errors.append(f"profileTypes do not provide positive weights for rank bands: {', '.join(missing)}")
+
+
+def validate_position_profile_coverage(class_budget: dict, position_profiles: dict, errors: list[str]) -> None:
+    position_weights = class_budget.get("positionWeights", {})
+    if not isinstance(position_weights, dict):
+        return
+    missing = sorted(
+        position
+        for position, weight in position_weights.items()
+        if isinstance(weight, (int, float)) and weight > 0 and position not in position_profiles
+    )
+    if missing:
+        errors.append(
+            "positionProfiles must define every position with positive classBudget.positionWeights: "
+            + ", ".join(missing)
+        )
+
+
+def normalize_archetype_profiles(value: object, errors: list[str]) -> tuple[dict, set[str]]:
+    if not isinstance(value, dict) or not value:
+        errors.append("archetypeProfiles must be a non-empty object")
+        return {}, set()
+    normalized = {}
+    ids: set[str] = set()
+    known_ratings = set(RECRUIT_RATING_SCHEMA_FIELDS)
+    for key, item in value.items():
+        archetype_id = clean_config_id(key, f"archetypeProfiles.{key}", errors)
+        ids.add(archetype_id)
+        if not isinstance(item, dict):
+            errors.append(f"archetypeProfiles.{key} must be an object")
+            continue
+        normalized_item = dict(item)
+        primary_ratings = item.get("primaryRatings", [])
+        if not isinstance(primary_ratings, list) or not primary_ratings:
+            errors.append(f"archetypeProfiles.{key}.primaryRatings must be a non-empty array")
+            primary_ratings = []
+        cleaned_ratings = []
+        for rating in primary_ratings:
+            if rating not in known_ratings:
+                errors.append(f"archetypeProfiles.{key}.primaryRatings contains unknown rating {rating}")
+                continue
+            cleaned_ratings.append(rating)
+        normalized_item["primaryRatings"] = cleaned_ratings
+        normalized[archetype_id] = normalized_item
+    return normalized, ids
+
+
+def normalize_position_profiles(
+    value: object,
+    archetype_ids: set[str],
+    body_rule_ids: set[str],
+    errors: list[str],
+) -> dict:
+    if not isinstance(value, dict):
+        errors.append("positionProfiles must be an object")
+        return {}
+    normalized = {}
+    for position, item in value.items():
+        if position not in RECRUIT_POSITION_OPTIONS:
+            errors.append(f"positionProfiles.{position} is not a known position")
+        if not isinstance(item, dict):
+            errors.append(f"positionProfiles.{position} must be an object")
+            continue
+        normalized_item = dict(item)
+        if "archetypeWeights" in item:
+            normalized_item["archetypeWeights"] = normalize_probability_map(
+                item["archetypeWeights"],
+                f"positionProfiles.{position}.archetypeWeights",
+                errors,
+            )
+            allowed_prefixes = POSITION_ARCHETYPE_PREFIXES.get(position, ())
+            for archetype_id in normalized_item["archetypeWeights"]:
+                if archetype_id not in archetype_ids:
+                    errors.append(f"positionProfiles.{position}.archetypeWeights.{archetype_id} is not defined in archetypeProfiles")
+                elif allowed_prefixes and not archetype_id.startswith(allowed_prefixes):
+                    errors.append(
+                        f"positionProfiles.{position}.archetypeWeights.{archetype_id} is not compatible with {position}; "
+                        f"expected archetype id prefix: {', '.join(allowed_prefixes)}"
+                    )
+        body_rule = item.get("bodyRule")
+        if body_rule is not None and body_rule not in body_rule_ids:
+            errors.append(f"positionProfiles.{position}.bodyRule {body_rule} is not defined in bodyRules")
+        normalized[position] = normalized_item
+    return normalized
+
+
+def normalize_body_rules(value: object, errors: list[str]) -> tuple[dict, set[str]]:
+    if not isinstance(value, dict):
+        errors.append("bodyRules must be an object")
+        return {}, set()
+    normalized = {}
+    ids: set[str] = set()
+    for key, item in value.items():
+        clean_key = clean_config_id(key, f"bodyRules.{key}", errors)
+        ids.add(clean_key)
+        if not isinstance(item, dict):
+            errors.append(f"bodyRules.{key} must be an object")
+            continue
+        normalized_item = dict(item)
+        if "heightInches" in item:
+            normalized_item["heightInches"] = numeric_range(item["heightInches"], f"bodyRules.{key}.heightInches", errors)
+        if "weightLbs" in item:
+            normalized_item["weightLbs"] = numeric_range(item["weightLbs"], f"bodyRules.{key}.weightLbs", errors)
+        height = normalized_item.get("heightInches")
+        weight = normalized_item.get("weightLbs")
+        if isinstance(height, dict):
+            if height.get("min", 0) < 48 or height.get("max", 0) > 96:
+                errors.append(f"bodyRules.{key}.heightInches must stay within 48 to 96 inches")
+        if isinstance(weight, dict):
+            if weight.get("min", 0) < 160 or weight.get("max", 0) > 415:
+                errors.append(f"bodyRules.{key}.weightLbs must stay within 160 to 415 pounds")
+        normalized[clean_key] = normalized_item
+    return normalized, ids
+
+
+def normalize_development(value: object, rank_band_ids: set[str], errors: list[str]) -> dict:
+    if not isinstance(value, dict):
+        errors.append("development must be an object")
+        return {}
+    normalized = dict(value)
+    trait_weights = normalize_probability_map(value.get("traitWeights", {}), "development.traitWeights", errors)
+    for trait in trait_weights:
+        if trait not in DEVELOPMENT_TRAIT_KEYS:
+            errors.append(f"development.traitWeights.{trait} is not a known development trait")
+    normalized["traitWeights"] = trait_weights
+    multipliers = value.get("rankBandMultipliers", {})
+    if not isinstance(multipliers, dict):
+        errors.append("development.rankBandMultipliers must be an object")
+        multipliers = {}
+    normalized_multipliers = {}
+    for band_id, raw_value in multipliers.items():
+        if band_id not in rank_band_ids:
+            errors.append(f"development.rankBandMultipliers.{band_id} does not match a rank band")
+        if not isinstance(raw_value, (int, float)) or raw_value < 0:
+            errors.append(f"development.rankBandMultipliers.{band_id} must be a non-negative number")
+            continue
+        normalized_multipliers[band_id] = float(raw_value)
+    normalized["rankBandMultipliers"] = normalized_multipliers
+    return normalized
+
+
+def normalize_quality_modifier(value: object, errors: list[str]) -> dict:
+    if not isinstance(value, dict):
+        errors.append("qualityModifier must be an object")
+        return {}
+    normalized = dict(value)
+    budgets = value.get("budgets", {})
+    if not isinstance(budgets, dict):
+        errors.append("qualityModifier.budgets must be an object")
+        budgets = {}
+    normalized_budgets = {}
+    for key, item in budgets.items():
+        if key not in QUALITY_MODIFIER_KEYS:
+            errors.append(f"qualityModifier.budgets.{key} is not a known quality modifier budget")
+        normalized_budgets[key] = count_range(item, f"qualityModifier.budgets.{key}", errors)
+    normalized["budgets"] = normalized_budgets
+    return normalized
+
+
+def normalize_validation_settings(value: object, errors: list[str]) -> dict:
+    if not isinstance(value, dict):
+        errors.append("validation must be an object")
+        return {}
+    normalized = dict(value)
+    for key in ("overallTolerance", "maxRareOverallCount"):
+        if key in value and (not isinstance(value[key], int) or value[key] < 0):
+            errors.append(f"validation.{key} must be a non-negative integer")
+    for key in ("requireRankBandCoverage", "blockResearchGatedWrites"):
+        if key in value and not isinstance(value[key], bool):
+            errors.append(f"validation.{key} must be true or false")
+    return normalized
+
+
+def resolve_write_field_states(write_fields: object, errors: list[str], warnings: list[str]) -> tuple[dict, dict]:
+    if not isinstance(write_fields, dict):
+        errors.append("writeFields must be an object when supplied")
+        return {}, {}
+    capabilities = {item["field"]: item for item in field_capabilities()["fields"]}
+    normalized = {}
+    states = {}
+    for key, value in write_fields.items():
+        if key not in CONFIG_WRITE_FIELD_GROUPS:
+            errors.append(f"writeFields.{key} is not a known write field group")
+            continue
+        if value is not True and value is not False and value != "after-research":
+            errors.append(f"writeFields.{key} must be true, false, or after-research")
+            continue
+        fields = CONFIG_WRITE_FIELD_GROUPS[key]
+        blocked = [field for field in fields if not capabilities.get(field, {}).get("safeToWrite")]
+        if value is True and blocked:
+            warnings.append(
+                f"writeFields.{key} requested writes to unverified fields and will be preview-only: "
+                + ", ".join(blocked)
+            )
+            normalized[key] = "after-research"
+        else:
+            normalized[key] = value
+        if value is False:
+            state = "disabled"
+        elif blocked:
+            state = "preview-only"
+        else:
+            state = "writable"
+        states[key] = {
+            "state": state,
+            "fields": fields,
+            "blockedFields": blocked,
+        }
+    return normalized, states
+
+
+def normalize_generator_config(config: object, recruit_count: int | None = None) -> dict:
+    errors: list[str] = []
+    warnings: list[str] = []
+    migration_warnings: list[str] = []
+    if recruit_count is not None and (isinstance(recruit_count, bool) or not isinstance(recruit_count, int) or recruit_count < 0):
+        errors.append("recruitCount must be a non-negative integer when supplied")
+        recruit_count = None
+    if not isinstance(config, dict):
+        return {
+            "valid": False,
+            "errors": [*errors, "config must be an object"],
+            "warnings": [],
+            "migrationWarnings": [],
+            "normalizedConfig": None,
+            "validationContext": {"recruitCount": recruit_count},
+            "fieldCapabilities": field_capabilities(),
+        }
+
+    config, migration_warnings, migration_errors = migrate_generator_config(config)
+    errors.extend(migration_errors)
+    missing = sorted(CONFIG_REQUIRED_TOP_LEVEL_KEYS - set(config))
+    if missing:
+        errors.append(f"Missing required config keys: {', '.join(missing)}")
+    version = config.get("configVersion")
+    if version != CONFIG_VERSION and not migration_errors:
+        errors.append(f"Unsupported configVersion {version}; no migration is available")
+
+    normalized = clone_json(config)
+    if isinstance(normalized, dict):
+        normalized["configVersion"] = version
+        normalized["id"] = clean_config_id(config.get("id"), "id", errors)
+        normalized["name"] = str(config.get("name") or "").strip()
+        if not normalized["name"]:
+            errors.append("name is required")
+        if config.get("game") != "CFB27":
+            errors.append("game must be CFB27")
+
+        generator = config.get("generator", {})
+        if not isinstance(generator, dict):
+            errors.append("generator must be an object")
+            generator = {}
+        mode = generator.get("mode")
+        write_policy = generator.get("writePolicy")
+        if mode != "reroll-existing-recruits":
+            errors.append("generator.mode must be reroll-existing-recruits")
+        if write_policy != "verified-fields-only":
+            errors.append("generator.writePolicy must be verified-fields-only")
+        normalized["generator"] = {"mode": mode, "writePolicy": write_policy}
+
+        normalized["classBudget"] = normalize_class_budget(config.get("classBudget"), errors)
+        rank_bands, rank_band_ids = normalize_rank_bands(config.get("rankBands"), errors)
+        normalized["rankBands"] = rank_bands
+        normalized["starCutoffs"] = normalize_star_cutoffs(config.get("starCutoffs"), errors)
+        compare_class_budget_to_star_cutoffs(normalized["classBudget"], normalized["starCutoffs"], warnings)
+        normalized["profileTypes"] = normalize_profile_types(config.get("profileTypes"), rank_band_ids, errors)
+        validate_profile_type_coverage(normalized["profileTypes"], rank_band_ids, errors)
+        normalized["archetypeProfiles"], archetype_ids = normalize_archetype_profiles(
+            config.get("archetypeProfiles"),
+            errors,
+        )
+        normalized["bodyRules"], body_rule_ids = normalize_body_rules(config.get("bodyRules"), errors)
+        normalized["positionProfiles"] = normalize_position_profiles(
+            config.get("positionProfiles"),
+            archetype_ids,
+            body_rule_ids,
+            errors,
+        )
+        validate_position_profile_coverage(normalized["classBudget"], normalized["positionProfiles"], errors)
+        normalized["development"] = normalize_development(config.get("development"), rank_band_ids, errors)
+        normalized["qualityModifier"] = normalize_quality_modifier(config.get("qualityModifier"), errors)
+        validate_budget_recruit_count(
+            normalized["classBudget"],
+            normalized["qualityModifier"],
+            recruit_count,
+            errors,
+        )
+        normalized["validation"] = normalize_validation_settings(config.get("validation"), errors)
+        write_fields, write_field_states = resolve_write_field_states(
+            config.get("writeFields", DEFAULT_GENERATOR_CONFIG["writeFields"]),
+            errors,
+            warnings,
+        )
+        normalized["writeFields"] = write_fields
+        normalized["writeFieldStates"] = write_field_states
+
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "migrationWarnings": migration_warnings,
+        "normalizedConfig": normalized if not errors else None,
+        "validationContext": {"recruitCount": recruit_count},
+        "fieldCapabilities": field_capabilities(),
+    }
+
+
+def default_generator_configs() -> dict:
+    validation = normalize_generator_config(DEFAULT_GENERATOR_CONFIG)
+    return {
+        "configs": [validation["normalizedConfig"] or clone_json(DEFAULT_GENERATOR_CONFIG)],
+        "fieldCapabilities": field_capabilities(),
+    }
+
+
+class StableRandom:
+    def __init__(self, seed: str):
+        self.seed = str(seed)
+        self.counter = 0
+
+    def random(self, label: str = "") -> float:
+        self.counter += 1
+        material = f"{self.seed}|{self.counter}|{label}".encode("utf-8")
+        digest = hashlib.sha256(material).digest()
+        return int.from_bytes(digest[:8], "big") / float(1 << 64)
+
+    def randint(self, minimum: int, maximum: int, label: str = "") -> int:
+        if maximum <= minimum:
+            return int(minimum)
+        span = maximum - minimum + 1
+        return minimum + int(self.random(label) * span)
+
+    def uniform(self, minimum: float, maximum: float, label: str = "") -> float:
+        if maximum <= minimum:
+            return float(minimum)
+        return float(minimum) + self.random(label) * (float(maximum) - float(minimum))
+
+    def weighted_choice(self, weights: dict, label: str = "") -> str:
+        positive = [(key, float(value)) for key, value in weights.items() if isinstance(value, (int, float)) and value > 0]
+        if not positive:
+            return next(iter(weights), "")
+        total = sum(value for _, value in positive)
+        cursor = self.random(label) * total
+        running = 0.0
+        for key, value in positive:
+            running += value
+            if cursor <= running:
+                return key
+        return positive[-1][0]
+
+    def shuffled(self, values: list, label: str = "") -> list:
+        return sorted(values, key=lambda item: self.random(f"{label}:{item}"))
+
+
+def clamp_int(value: float, minimum: int, maximum: int) -> int:
+    return max(minimum, min(maximum, int(round(value))))
+
+
+def rank_band_for_rank(config: dict, rank: int) -> dict | None:
+    for band in config.get("rankBands", []):
+        maximum = band.get("maxRank")
+        if rank >= band.get("minRank", 1) and (maximum is None or rank <= maximum):
+            return band
+    return None
+
+
+def star_for_rank(config: dict, rank: int) -> str:
+    for star, cutoff in config.get("starCutoffs", {}).items():
+        maximum = cutoff.get("maxRank")
+        if rank >= cutoff.get("minRank", 1) and (maximum is None or rank <= maximum):
+            return star
+    return "ONE_STAR"
+
+
+def allocate_weighted_counts(total: int, weights: dict) -> list[str]:
+    positive = [(key, float(value)) for key, value in weights.items() if isinstance(value, (int, float)) and value > 0]
+    if not positive or total <= 0:
+        return []
+    weight_total = sum(value for _, value in positive)
+    allocations = []
+    assigned = 0
+    for key, weight in positive:
+        exact = total * weight / weight_total
+        count = int(exact)
+        assigned += count
+        allocations.append([key, count, exact - count])
+    for item in sorted(allocations, key=lambda row: row[2], reverse=True)[: max(0, total - assigned)]:
+        item[1] += 1
+    result: list[str] = []
+    for key, count, _ in allocations:
+        result.extend([key] * count)
+    return result[:total]
+
+
+def profile_type_for_band(config: dict, band_id: str, rng: StableRandom, label: str) -> str:
+    weights = {
+        profile_id: profile.get("rankBandWeights", {}).get(band_id, 0)
+        for profile_id, profile in config.get("profileTypes", {}).items()
+    }
+    return rng.weighted_choice(weights, label) or next(iter(config.get("profileTypes", {})), "Developmental")
+
+
+def score_from_profile(profile_config: dict, key: str, rng: StableRandom, label: str) -> float:
+    score_range = profile_config.get(key, {})
+    return round(rng.uniform(score_range.get("min", 0.5), score_range.get("max", 0.5), label), 4)
+
+
+def body_composition_for_size(rule: dict, height: int, weight: int) -> str:
+    height_range = rule.get("heightInches", {})
+    weight_range = rule.get("weightLbs", {})
+    h_min = height_range.get("min", height)
+    h_max = height_range.get("max", height)
+    w_min = weight_range.get("min", weight)
+    w_max = weight_range.get("max", weight)
+    height_pct = 0.5 if h_max == h_min else (height - h_min) / (h_max - h_min)
+    weight_pct = 0.5 if w_max == w_min else (weight - w_min) / (w_max - w_min)
+    if height_pct >= 0.68 and weight_pct <= 0.45:
+        return "LONG"
+    if weight_pct >= 0.7:
+        return "POWER"
+    if weight_pct <= 0.32:
+        return "LEAN"
+    return "BALANCED"
+
+
+GENERAL_RATING_WEIGHTS = {
+    "speed": "physical",
+    "acceleration": "physical",
+    "strength": "physical",
+    "agility": "physical",
+    "jumping": "physical",
+    "awareness": "mental",
+    "injury": "readiness",
+    "stamina": "readiness",
+    "toughness": "mental",
+}
+
+
+RATING_KEYWORD_WEIGHTS = {
+    "throw": "technical",
+    "accuracy": "technical",
+    "route": "technical",
+    "catch": "technical",
+    "block": "technical",
+    "coverage": "technical",
+    "tackle": "technical",
+    "moves": "technical",
+    "power": "physical",
+    "speed": "physical",
+    "strength": "physical",
+    "agility": "physical",
+    "vision": "mental",
+    "recognition": "mental",
+    "awareness": "mental",
+    "pursuit": "readiness",
+    "carrying": "readiness",
+    "return": "physical",
+}
+
+
+def score_for_rating(rating: str, scores: dict, primary_ratings: set[str]) -> float:
+    if rating in primary_ratings:
+        return 0.45 * scores["technical"] + 0.25 * scores["physical"] + 0.2 * scores["readiness"] + 0.1 * scores["mental"]
+    if rating in GENERAL_RATING_WEIGHTS:
+        return scores[GENERAL_RATING_WEIGHTS[rating]]
+    for keyword, score_key in RATING_KEYWORD_WEIGHTS.items():
+        if keyword in rating:
+            return scores[score_key]
+    return 0.35 * scores["technical"] + 0.25 * scores["physical"] + 0.25 * scores["readiness"] + 0.15 * scores["mental"]
+
+
+def generate_ratings(
+    target_overall: int,
+    scores: dict,
+    primary_ratings: set[str],
+    rng: StableRandom,
+    label: str,
+) -> dict:
+    ratings: dict[str, int] = {}
+    for rating_key in RECRUIT_RATING_SCHEMA_FIELDS:
+        if rating_key == "overall":
+            continue
+        identity_score = score_for_rating(rating_key, scores, primary_ratings)
+        offset = (identity_score - 0.62) * 24
+        if rating_key in primary_ratings:
+            offset += 7
+        elif rating_key not in GENERAL_RATING_WEIGHTS:
+            offset -= 9
+        noise = rng.uniform(-5.5, 5.5, f"{label}:rating:{rating_key}")
+        ratings[rating_key] = clamp_int(target_overall + offset + noise, 18, 99)
+    primary_values = [ratings[key] for key in primary_ratings if key in ratings]
+    if primary_values:
+        calculated = round((sum(primary_values) / len(primary_values)) * 0.68 + target_overall * 0.32)
+    else:
+        calculated = target_overall
+    ratings["overall"] = clamp_int(calculated, 40, 99)
+    delta = target_overall - ratings["overall"]
+    if abs(delta) > 1 and primary_ratings:
+        for key in primary_ratings:
+            if key in ratings:
+                ratings[key] = clamp_int(ratings[key] + delta * 0.75, 18, 99)
+        primary_values = [ratings[key] for key in primary_ratings if key in ratings]
+        ratings["overall"] = clamp_int((sum(primary_values) / len(primary_values)) if primary_values else target_overall, 40, 99)
+    return ratings
+
+
+def choose_development_trait(
+    config: dict,
+    band_id: str,
+    rank_index: int,
+    elite_budget: int,
+    rng: StableRandom,
+    label: str,
+) -> str:
+    if rank_index < elite_budget:
+        return "College_Elite"
+    weights = dict(config.get("development", {}).get("traitWeights", {}))
+    weights["College_Elite"] = 0
+    multiplier = config.get("development", {}).get("rankBandMultipliers", {}).get(band_id, 1)
+    for trait in ("College_Impact", "College_Star"):
+        if trait in weights:
+            weights[trait] = weights[trait] * multiplier
+    return rng.weighted_choice(weights, label) or "Normal"
+
+
+def count_budget_value(config: dict, path: tuple[str, ...], rng: StableRandom, label: str) -> int:
+    current: object = config
+    for key in path:
+        current = current.get(key, {}) if isinstance(current, dict) else {}
+    if not isinstance(current, dict):
+        return 0
+    minimum = int(current.get("min", 0))
+    maximum = int(current.get("max", minimum))
+    return rng.randint(minimum, maximum, label)
+
+
+def generated_field_values(profile: dict, generated: dict) -> dict[str, tuple[str, str, object, object]]:
+    football = generated.get("footballProfile", {})
+    game = generated.get("gameFields", {})
+    ratings = game.get("ratings", {})
+    original_recruit = profile.get("originalFields", {}).get("Recruit", {})
+    original_player = profile.get("originalFields", {}).get("Player", {})
+    values = {
+        "Recruit.NationalRank": ("national_rank", "ranks", original_recruit.get("NationalRank"), football.get("nationalRank")),
+        "Recruit.PositionRank": ("position_rank", "ranks", original_recruit.get("PositionRank"), football.get("positionRank")),
+        "Recruit.StateRank": ("state_rank", "ranks", original_recruit.get("StateRank"), football.get("stateRank")),
+        "Player.Position": ("position", "identity", original_player.get("Position"), football.get("position")),
+        "Player.ProspectStarRating": ("star_rating", "starRating", original_player.get("ProspectStarRating"), football.get("starRating")),
+        "Player.PlayerType": ("player_type", "archetype", original_player.get("PlayerType"), football.get("archetype")),
+        "Recruit.QualityModifier": (
+            "quality_modifier",
+            "qualityModifier",
+            original_recruit.get("QualityModifier"),
+            game.get("qualityModifier"),
+        ),
+        "Player.TraitDevelopment": (
+            "dev_trait",
+            "developmentTrait",
+            original_player.get("TraitDevelopment"),
+            game.get("developmentTrait"),
+        ),
+        "Player.Height": ("height_inches", "body", original_player.get("Height"), game.get("heightInches")),
+        "Player.Weight": ("weight_lbs", "body", None, game.get("weightLbs")),
+    }
+    raw_weight = original_player.get("Weight")
+    if isinstance(raw_weight, int):
+        values["Player.Weight"] = ("weight_lbs", "body", decode_weight_lbs(raw_weight), game.get("weightLbs"))
+    for rating_key, schema_field in RECRUIT_RATING_SCHEMA_FIELDS.items():
+        values[f"Player.{schema_field}"] = (
+            rating_key,
+            "ratings",
+            original_player.get(schema_field),
+            ratings.get(rating_key),
+        )
+    return values
+
+
+def lock_blocks_group(locks: dict, group: str) -> bool:
+    if locks.get("rowLocked"):
+        return True
+    locked_fields = set(locks.get("fields") or [])
+    if group == "ratings":
+        return "gameFields.ratings" in locked_fields
+    if group == "body":
+        return "gameFields.size" in locked_fields
+    if group == "developmentTrait":
+        return "gameFields.developmentTrait" in locked_fields
+    if group in {"ranks", "identity"}:
+        return "footballProfile" in locked_fields or "identity" in locked_fields
+    return group in locked_fields
+
+
+def preview_write_diffs(profile: dict, generated: dict, config: dict) -> tuple[dict, list[dict], list[str]]:
+    capability_by_field = {item["field"]: item for item in field_capabilities()["fields"]}
+    write_states = config.get("writeFieldStates", {})
+    generated_writes: dict[str, object] = {}
+    diffs: list[dict] = []
+    skipped: list[str] = []
+    locks = generated.get("locks", {})
+    for field, (patch_key, group, before, after) in generated_field_values(profile, generated).items():
+        if before == after:
+            continue
+        if lock_blocks_group(locks, group):
+            skipped.append(f"{field} skipped by lock")
+            continue
+        state = write_states.get(group, {}).get("state", "disabled")
+        capability = capability_by_field.get(field, {})
+        if state != "writable" or not capability.get("safeToWrite"):
+            skipped.append(f"{field} skipped because {capability.get('generatorState', state)}")
+            continue
+        generated_writes[patch_key] = after
+        diffs.append(
+            {
+                "recruitId": profile.get("recruitId"),
+                "playerId": profile.get("playerId"),
+                "source": profile.get("source", {}),
+                "field": field,
+                "patchKey": patch_key,
+                "from": before,
+                "to": after,
+                "writeState": "writable",
+            }
+        )
+    return generated_writes, diffs, skipped
+
+
+def rating_bounds_by_key() -> dict[str, tuple[int, int]]:
+    return {
+        key: (minimum, maximum)
+        for key, _, _, _, minimum, maximum in RECRUIT_RATING_COLUMNS
+    }
+
+
+def encode_weight_lbs(weight_lbs: int) -> int:
+    return int(weight_lbs) - 160
+
+
+def decode_weight_lbs(encoded_weight: int) -> int:
+    return int(encoded_weight) + 160
+
+
+def max_budget_value(config: dict, path: tuple[str, ...]) -> int | None:
+    current: object = config
+    for key in path:
+        current = current.get(key, {}) if isinstance(current, dict) else {}
+    if not isinstance(current, dict):
+        return None
+    value = current.get("max")
+    return value if isinstance(value, int) else None
+
+
+def budget_range_value(config: dict, path: tuple[str, ...]) -> dict:
+    current: object = config
+    for key in path:
+        current = current.get(key, {}) if isinstance(current, dict) else {}
+    if not isinstance(current, dict):
+        return {"min": 0, "max": 0}
+    minimum = current.get("min", 0)
+    maximum = current.get("max", minimum)
+    return {
+        "min": minimum if isinstance(minimum, int) else 0,
+        "max": maximum if isinstance(maximum, int) else 0,
+    }
+
+
+def validate_generated_preview_class(
+    generated_profiles: list[dict],
+    config: dict,
+    diffs: list[dict],
+) -> dict:
+    errors: list[str] = []
+    warnings: list[str] = []
+    checks: dict[str, object] = {}
+    ranks = [item.get("footballProfile", {}).get("nationalRank") for item in generated_profiles]
+    expected_ranks = list(range(1, len(generated_profiles) + 1))
+    checks["nationalRanksUnique"] = len(ranks) == len(set(ranks))
+    checks["nationalRanksContiguous"] = sorted(ranks) == expected_ranks
+    if not checks["nationalRanksUnique"]:
+        errors.append("Generated national ranks are not unique")
+    if not checks["nationalRanksContiguous"]:
+        errors.append("Generated national ranks are not contiguous from 1 to class size")
+
+    position_rank_seen: dict[str, set[int]] = {}
+    position_rank_counts: dict[str, int] = {}
+    state_rank_seen: dict[str, set[int]] = {}
+    state_rank_counts: dict[str, int] = {}
+    star_mismatch_count = 0
+    typical_overall_warning_count = 0
+    rare_overall_error_count = 0
+    rating_bound_error_count = 0
+    body_rule_error_count = 0
+    encoded_weight_error_count = 0
+    locked_write_count = 0
+    rank_band_details: dict[str, dict] = {}
+    position_details: dict[str, dict] = {}
+    warning_samples: list[dict] = []
+    error_samples: list[dict] = []
+    bounds = rating_bounds_by_key()
+    position_profiles = config.get("positionProfiles", {})
+    body_rules = config.get("bodyRules", {})
+
+    locked_recruit_ids = {
+        item.get("recruitId")
+        for item in generated_profiles
+        if item.get("locks", {}).get("rowLocked")
+    }
+    for diff in diffs:
+        if diff.get("recruitId") in locked_recruit_ids:
+            locked_write_count += 1
+
+    for profile in generated_profiles:
+        football = profile.get("footballProfile", {})
+        game = profile.get("gameFields", {})
+        identity = profile.get("identity", {})
+        rank = football.get("nationalRank")
+        position = football.get("position") or ""
+        position_rank = football.get("positionRank")
+        position_rank_counts[position] = position_rank_counts.get(position, 0) + 1
+        position_rank_seen.setdefault(position, set()).add(position_rank)
+        position_detail = position_details.setdefault(
+            position,
+            {"count": 0, "overallTotal": 0, "minOverall": None, "maxOverall": None, "minRank": None, "maxRank": None},
+        )
+        position_detail["count"] += 1
+        if isinstance(rank, int):
+            position_detail["minRank"] = rank if position_detail["minRank"] is None else min(position_detail["minRank"], rank)
+            position_detail["maxRank"] = rank if position_detail["maxRank"] is None else max(position_detail["maxRank"], rank)
+
+        home_state = identity.get("homeState") or ""
+        if home_state:
+            state_rank = football.get("stateRank")
+            state_rank_counts[home_state] = state_rank_counts.get(home_state, 0) + 1
+            state_rank_seen.setdefault(home_state, set()).add(state_rank)
+
+        if isinstance(rank, int) and football.get("starRating") != star_for_rank(config, rank):
+            star_mismatch_count += 1
+
+        band = rank_band_for_rank(config, rank) if isinstance(rank, int) else None
+        ratings = game.get("ratings", {})
+        overall = ratings.get("overall")
+        body_rule_id = position_profiles.get(position, {}).get("bodyRule") if isinstance(position_profiles, dict) else None
+        body_rule = body_rules.get(body_rule_id, {}) if isinstance(body_rules, dict) else {}
+        height = game.get("heightInches")
+        weight = game.get("weightLbs")
+        encoded_weight = game.get("encodedWeight")
+        height_range = body_rule.get("heightInches", {}) if isinstance(body_rule, dict) else {}
+        weight_range = body_rule.get("weightLbs", {}) if isinstance(body_rule, dict) else {}
+        height_valid = (
+            isinstance(height, int)
+            and isinstance(height_range.get("min"), int)
+            and isinstance(height_range.get("max"), int)
+            and height_range["min"] <= height <= height_range["max"]
+        )
+        weight_valid = (
+            isinstance(weight, int)
+            and isinstance(weight_range.get("min"), int)
+            and isinstance(weight_range.get("max"), int)
+            and weight_range["min"] <= weight <= weight_range["max"]
+        )
+        if not height_valid or not weight_valid:
+            body_rule_error_count += 1
+            if len(error_samples) < 12:
+                error_samples.append(
+                    {
+                        "recruitId": profile.get("recruitId"),
+                        "rank": rank,
+                        "position": position,
+                        "rankBand": band["id"] if band else None,
+                        "overall": overall,
+                        "issue": "height or weight outside configured body rule",
+                    }
+                )
+        if not isinstance(weight, int) or encoded_weight != encode_weight_lbs(weight):
+            encoded_weight_error_count += 1
+            if len(error_samples) < 12:
+                error_samples.append(
+                    {
+                        "recruitId": profile.get("recruitId"),
+                        "rank": rank,
+                        "position": position,
+                        "rankBand": band["id"] if band else None,
+                        "overall": overall,
+                        "issue": "encoded weight does not match display weight",
+                    }
+                )
+        if band and isinstance(overall, int):
+            band_detail = rank_band_details.setdefault(
+                band["id"],
+                {
+                    "count": 0,
+                    "overallTotal": 0,
+                    "minOverall": None,
+                    "maxOverall": None,
+                    "typicalOverallWarnings": 0,
+                    "rareOverallErrors": 0,
+                },
+            )
+            band_detail["count"] += 1
+            band_detail["overallTotal"] += overall
+            band_detail["minOverall"] = overall if band_detail["minOverall"] is None else min(band_detail["minOverall"], overall)
+            band_detail["maxOverall"] = overall if band_detail["maxOverall"] is None else max(band_detail["maxOverall"], overall)
+            position_detail["overallTotal"] += overall
+            position_detail["minOverall"] = overall if position_detail["minOverall"] is None else min(position_detail["minOverall"], overall)
+            position_detail["maxOverall"] = overall if position_detail["maxOverall"] is None else max(position_detail["maxOverall"], overall)
+            typical = band.get("typicalOverall", {})
+            rare_max = band.get("rareMaxOverall")
+            if isinstance(rare_max, int) and overall > rare_max:
+                rare_overall_error_count += 1
+                band_detail["rareOverallErrors"] += 1
+                if len(error_samples) < 12:
+                    error_samples.append(
+                        {
+                            "recruitId": profile.get("recruitId"),
+                            "rank": rank,
+                            "position": position,
+                            "rankBand": band["id"],
+                            "overall": overall,
+                            "issue": "overall exceeds rare rank-band maximum",
+                        }
+                    )
+            elif (
+                isinstance(typical.get("min"), int)
+                and isinstance(typical.get("max"), int)
+                and not (typical["min"] <= overall <= typical["max"])
+            ):
+                typical_overall_warning_count += 1
+                band_detail["typicalOverallWarnings"] += 1
+                if len(warning_samples) < 12:
+                    warning_samples.append(
+                        {
+                            "recruitId": profile.get("recruitId"),
+                            "rank": rank,
+                            "position": position,
+                            "rankBand": band["id"],
+                            "overall": overall,
+                            "issue": "overall outside typical rank-band range",
+                        }
+                    )
+
+        for rating_key, value in ratings.items():
+            minimum, maximum = bounds.get(rating_key, (0, 99))
+            if not isinstance(value, int) or value < minimum or value > maximum:
+                rating_bound_error_count += 1
+
+    invalid_position_rank_positions = [
+        position
+        for position, count in position_rank_counts.items()
+        if position_rank_seen.get(position) != set(range(1, count + 1))
+    ]
+    invalid_state_rank_states = [
+        state
+        for state, count in state_rank_counts.items()
+        if state_rank_seen.get(state) != set(range(1, count + 1))
+    ]
+
+    if invalid_position_rank_positions:
+        errors.append(
+            "Generated position ranks are not unique/contiguous for: "
+            + ", ".join(sorted(invalid_position_rank_positions))
+        )
+    if invalid_state_rank_states:
+        errors.append(
+            "Generated state ranks are not unique/contiguous for known states: "
+            + ", ".join(sorted(invalid_state_rank_states))
+        )
+    if star_mismatch_count:
+        errors.append(f"{star_mismatch_count} generated star rating(s) do not match rank cutoffs")
+    if rare_overall_error_count:
+        errors.append(f"{rare_overall_error_count} generated overall rating(s) exceed rare rank-band maximums")
+    if rating_bound_error_count:
+        errors.append(f"{rating_bound_error_count} generated rating value(s) are outside configured field bounds")
+    if body_rule_error_count:
+        errors.append(f"{body_rule_error_count} generated body profile(s) are outside configured body rules")
+    if encoded_weight_error_count:
+        errors.append(f"{encoded_weight_error_count} generated encoded weight value(s) do not match display weight")
+    if locked_write_count:
+        errors.append(f"{locked_write_count} generated diff(s) target row-locked recruits")
+    if typical_overall_warning_count:
+        warnings.append(
+            f"{typical_overall_warning_count} generated overall rating(s) are outside typical rank-band ranges but within rare caps"
+        )
+
+    elite_count = sum(
+        1
+        for profile in generated_profiles
+        if profile.get("gameFields", {}).get("developmentTrait") == "College_Elite"
+    )
+    elite_max = max_budget_value(config, ("classBudget", "eliteDevelopmentCount"))
+    if elite_max is not None and elite_count > elite_max:
+        errors.append(f"College_Elite development count {elite_count} exceeds configured max {elite_max}")
+
+    quality_counts: dict[str, int] = {}
+    for profile in generated_profiles:
+        quality = profile.get("gameFields", {}).get("qualityModifier")
+        quality_counts[quality] = quality_counts.get(quality, 0) + 1
+    for quality in QUALITY_MODIFIER_KEYS:
+        quality_max = max_budget_value(config, ("qualityModifier", "budgets", quality))
+        if quality_max is not None and quality_counts.get(quality, 0) > quality_max:
+            errors.append(f"{quality} count {quality_counts.get(quality, 0)} exceeds configured max {quality_max}")
+
+    checks.update(
+        {
+            "positionRanksValid": not invalid_position_rank_positions,
+            "stateRanksValid": not invalid_state_rank_states,
+            "starRatingsMatchRankCutoffs": star_mismatch_count == 0,
+            "ratingsWithinBounds": rating_bound_error_count == 0,
+            "bodyRulesValid": body_rule_error_count == 0,
+            "encodedWeightsValid": encoded_weight_error_count == 0,
+            "rareOverallCapsValid": rare_overall_error_count == 0,
+            "lockedRowsUnchangedByDiffs": locked_write_count == 0,
+            "eliteDevelopmentWithinBudget": elite_max is None or elite_count <= elite_max,
+            "qualityModifierWithinBudget": all(
+                max_budget_value(config, ("qualityModifier", "budgets", quality)) is None
+                or quality_counts.get(quality, 0) <= max_budget_value(config, ("qualityModifier", "budgets", quality))
+                for quality in QUALITY_MODIFIER_KEYS
+            ),
+        }
+    )
+    for detail in rank_band_details.values():
+        detail["averageOverall"] = round(detail["overallTotal"] / detail["count"], 2) if detail["count"] else None
+        del detail["overallTotal"]
+    for detail in position_details.values():
+        detail["averageOverall"] = round(detail["overallTotal"] / detail["count"], 2) if detail["count"] else None
+        del detail["overallTotal"]
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "checks": checks,
+        "counts": {
+            "typicalOverallWarnings": typical_overall_warning_count,
+            "rareOverallErrors": rare_overall_error_count,
+            "ratingBoundErrors": rating_bound_error_count,
+            "bodyRuleErrors": body_rule_error_count,
+            "encodedWeightErrors": encoded_weight_error_count,
+            "starMismatches": star_mismatch_count,
+            "lockedWriteDiffs": locked_write_count,
+            "eliteDevelopment": elite_count,
+        },
+        "details": {
+            "rankBands": rank_band_details,
+            "positions": position_details,
+            "invalidPositionRankPositions": sorted(invalid_position_rank_positions),
+            "invalidStateRankStates": sorted(invalid_state_rank_states),
+        },
+        "samples": {
+            "warnings": warning_samples,
+            "errors": error_samples,
+        },
+    }
+
+
+def summarize_preview_diffs(diffs: list[dict]) -> list[dict]:
+    by_field: dict[str, dict] = {}
+    for diff in diffs:
+        field = diff.get("field") or diff.get("patchKey") or "unknown"
+        item = by_field.setdefault(
+            field,
+            {
+                "field": field,
+                "patchKey": diff.get("patchKey"),
+                "count": 0,
+                "sampleRecruitId": diff.get("recruitId"),
+                "sampleFrom": diff.get("from"),
+                "sampleTo": diff.get("to"),
+            },
+        )
+        item["count"] += 1
+    return sorted(by_field.values(), key=lambda item: (-item["count"], item["field"]))
+
+
+def recruit_budget_ref(profile: dict) -> dict:
+    football = profile.get("footballProfile", {})
+    identity = profile.get("identity", {})
+    game = profile.get("gameFields", {})
+    return {
+        "recruitId": profile.get("recruitId"),
+        "name": f"{identity.get('firstName', '')} {identity.get('lastName', '')}".strip(),
+        "rank": football.get("nationalRank"),
+        "position": football.get("position"),
+        "overall": game.get("ratings", {}).get("overall"),
+    }
+
+
+def summarize_budget_consumers(generated_profiles: list[dict]) -> dict:
+    consumers = {
+        "generationalFreshman": [],
+        "eliteDevelopment": [],
+        "Gem": [],
+        "Bust": [],
+    }
+    for profile in generated_profiles:
+        intent = profile.get("generationIntent", {})
+        game = profile.get("gameFields", {})
+        if intent.get("generationalFreshman"):
+            consumers["generationalFreshman"].append(recruit_budget_ref(profile))
+        if game.get("developmentTrait") == "College_Elite":
+            consumers["eliteDevelopment"].append(recruit_budget_ref(profile))
+        quality = game.get("qualityModifier")
+        if quality in {"Gem", "Bust"}:
+            consumers[quality].append(recruit_budget_ref(profile))
+    for key in consumers:
+        consumers[key] = sorted(consumers[key], key=lambda item: item.get("rank") or 999999)[:24]
+    return consumers
+
+
+def generate_recruit_preview_from_profiles(
+    joined: dict,
+    config: dict,
+    seed: str,
+    locks: dict | None = None,
+) -> dict:
+    profiles = clone_json(joined.get("recruits", []))
+    if not profiles:
+        raise AppError("No joined recruit profiles are available for preview", 422)
+    validation = joined.get("validation", {})
+    if validation and not validation.get("passed", True):
+        raise AppError("Joined recruit validation failed; preview cannot run", 422)
+
+    config_result = normalize_generator_config(config, recruit_count=joined.get("count") or len(profiles))
+    if not config_result["valid"]:
+        return {
+            "previewId": "",
+            "configHash": "",
+            "saveFingerprint": joined.get("saveFingerprint", ""),
+            "seed": seed,
+            "valid": False,
+            "errors": config_result["errors"],
+            "warnings": config_result["warnings"],
+            "summary": {},
+            "recruits": [],
+            "diffs": [],
+            "fieldCapabilities": field_capabilities(),
+        }
+    normalized = config_result["normalizedConfig"]
+    seed_material = "|".join(
+        [
+            str(seed or "default"),
+            str(joined.get("saveFingerprint", "")),
+            json.dumps(normalized, sort_keys=True),
+        ]
+    )
+    rng = StableRandom(seed_material)
+    count = len(profiles)
+    strength = normalized.get("classBudget", {}).get("classStrengthModifier", {})
+    class_strength = rng.uniform(strength.get("min", 0), strength.get("max", 0), "class-strength")
+    position_slots = rng.shuffled(
+        allocate_weighted_counts(count, normalized.get("classBudget", {}).get("positionWeights", {})),
+        "positions",
+    )
+    if len(position_slots) < count:
+        position_slots.extend([profiles[index].get("footballProfile", {}).get("position") or "WR" for index in range(len(position_slots), count)])
+
+    elite_budget = count_budget_value(normalized, ("classBudget", "eliteDevelopmentCount"), rng, "elite-dev-budget")
+    generational_budget = count_budget_value(normalized, ("classBudget", "generationalFreshmanCount"), rng, "generational-budget")
+    gem_budget = count_budget_value(normalized, ("qualityModifier", "budgets", "Gem"), rng, "gem-budget")
+    bust_budget = count_budget_value(normalized, ("qualityModifier", "budgets", "Bust"), rng, "bust-budget")
+    class_budget_summary = {
+        "generationalFreshman": {
+            **budget_range_value(normalized, ("classBudget", "generationalFreshmanCount")),
+            "target": min(generational_budget, count),
+            "actual": 0,
+        },
+        "eliteDevelopment": {
+            **budget_range_value(normalized, ("classBudget", "eliteDevelopmentCount")),
+            "target": min(elite_budget, count),
+            "actual": 0,
+        },
+        "Gem": {
+            **budget_range_value(normalized, ("qualityModifier", "budgets", "Gem")),
+            "target": min(gem_budget, count),
+            "actual": 0,
+        },
+        "Bust": {
+            **budget_range_value(normalized, ("qualityModifier", "budgets", "Bust")),
+            "target": min(bust_budget, max(0, count - min(gem_budget, count))),
+            "actual": 0,
+        },
+    }
+    quality_slots = ["Gem"] * min(gem_budget, count) + ["Bust"] * min(bust_budget, max(0, count - gem_budget))
+    quality_slots.extend(["NORMAL"] * max(0, count - len(quality_slots)))
+    quality_slots = rng.shuffled(quality_slots[:count], "quality-slots")
+
+    candidates: list[dict] = []
+    for index, profile in enumerate(rng.shuffled(profiles, "profile-order")):
+        intended_rank = index + 1
+        band = rank_band_for_rank(normalized, intended_rank) or normalized["rankBands"][-1]
+        band_id = band["id"]
+        position = position_slots[index]
+        position_profile = normalized.get("positionProfiles", {}).get(position) or next(iter(normalized.get("positionProfiles", {}).values()))
+        archetype = rng.weighted_choice(position_profile.get("archetypeWeights", {}), f"archetype:{index}")
+        archetype_profile = normalized.get("archetypeProfiles", {}).get(archetype, {})
+        profile_type = profile_type_for_band(normalized, band_id, rng, f"profile-type:{index}")
+        profile_config = normalized.get("profileTypes", {}).get(profile_type, {})
+        scores = {
+            "readiness": score_from_profile(profile_config, "readiness", rng, f"readiness:{index}"),
+            "physical": score_from_profile(profile_config, "physical", rng, f"physical:{index}"),
+            "technical": score_from_profile(profile_config, "technical", rng, f"technical:{index}"),
+            "mental": score_from_profile(profile_config, "mental", rng, f"mental:{index}"),
+            "ceiling": score_from_profile(profile_config, "ceiling", rng, f"ceiling:{index}"),
+        }
+        scores["confidence"] = round(0.54 + scores["readiness"] * 0.28 + rng.uniform(-0.08, 0.1, f"confidence:{index}"), 4)
+        typical = band.get("typicalOverall", band.get("expectedOverall", {"min": 60, "max": 70}))
+        target_overall = rng.randint(typical.get("min", 60), typical.get("max", 70), f"ovr:{index}")
+        target_overall = clamp_int(target_overall + class_strength * 2 + (scores["readiness"] - 0.58) * 4, 40, band.get("rareMaxOverall", 99))
+        if index < generational_budget:
+            target_overall = clamp_int(max(target_overall, band.get("expectedOverall", {}).get("max", target_overall) + 2), 40, band.get("rareMaxOverall", 99))
+        ratings = generate_ratings(
+            target_overall,
+            scores,
+            set(archetype_profile.get("primaryRatings", [])),
+            rng,
+            f"candidate:{index}",
+        )
+        ratings["overall"] = min(ratings["overall"], band.get("rareMaxOverall", ratings["overall"]))
+        body_rule = normalized.get("bodyRules", {}).get(position_profile.get("bodyRule"), {})
+        height_range = body_rule.get("heightInches", {"min": 70, "max": 76})
+        weight_range = body_rule.get("weightLbs", {"min": 180, "max": 240})
+        height = rng.randint(height_range.get("min", 70), height_range.get("max", 76), f"height:{index}")
+        weight = rng.randint(weight_range.get("min", 180), weight_range.get("max", 240), f"weight:{index}")
+        development_trait = choose_development_trait(normalized, band_id, index, elite_budget, rng, f"dev:{index}")
+        quality_score = (
+            ratings["overall"] * 1.0
+            + scores["ceiling"] * 8
+            + scores["physical"] * 5
+            + scores["technical"] * 5
+            + rng.uniform(-0.35, 0.35, f"quality:{index}")
+        )
+        candidates.append(
+            {
+                "profile": profile,
+                "position": position,
+                "archetype": archetype,
+                "profileType": profile_type,
+                "scores": scores,
+                "bodyRule": body_rule,
+                "height": height,
+                "weight": weight,
+                "bodyComposition": body_composition_for_size(body_rule, height, weight),
+                "ratings": ratings,
+                "developmentTrait": development_trait,
+                "qualityModifier": quality_slots[index] if index < len(quality_slots) else "NORMAL",
+                "generationalFreshman": index < generational_budget,
+                "qualityScore": quality_score,
+                "intendedRankBand": band_id,
+            }
+        )
+
+    candidates.sort(key=lambda item: item["qualityScore"], reverse=True)
+    position_counts: dict[str, int] = {}
+    state_counts: dict[str, int] = {}
+    generated_profiles: list[dict] = []
+    all_diffs: list[dict] = []
+    warnings = list(config_result.get("warnings", []))
+    skipped_fields: set[str] = set()
+    rare_overall_count = 0
+    star_counts: dict[str, int] = {}
+    rank_band_counts: dict[str, int] = {}
+    development_counts: dict[str, int] = {}
+    position_summary: dict[str, int] = {}
+    quality_counts: dict[str, int] = {}
+    lock_map = locks if isinstance(locks, dict) else {}
+
+    for national_index, candidate in enumerate(candidates):
+        rank = national_index + 1
+        profile = candidate["profile"]
+        sidecar_lock_key = profile.get("sidecar", {}).get("recordId")
+        full_lock_key = (
+            f"{profile.get('source', {}).get('saveFingerprint', joined.get('saveFingerprint', ''))}:"
+            f"R{profile.get('source', {}).get('recruitRow')}:P{profile.get('source', {}).get('playerRow')}"
+        )
+        lock_key = next((key for key in (sidecar_lock_key, full_lock_key) if key in lock_map), "")
+        if lock_key and isinstance(lock_map[lock_key], dict):
+            profile["locks"] = {
+                "rowLocked": bool(lock_map[lock_key].get("rowLocked")),
+                "fields": sorted(lock_map[lock_key].get("fields") or []),
+            }
+        band = rank_band_for_rank(normalized, rank) or normalized["rankBands"][-1]
+        star = star_for_rank(normalized, rank)
+        position = candidate["position"]
+        final_ratings = dict(candidate["ratings"])
+        final_ratings["overall"] = min(final_ratings["overall"], band.get("rareMaxOverall", final_ratings["overall"]))
+        position_counts[position] = position_counts.get(position, 0) + 1
+        home_state = profile.get("identity", {}).get("homeState") or ""
+        state_rank = profile.get("footballProfile", {}).get("stateRank") or rank
+        if home_state:
+            state_counts[home_state] = state_counts.get(home_state, 0) + 1
+            state_rank = state_counts[home_state]
+        generated = clone_json(profile)
+        generated["footballProfile"] = {
+            **generated.get("footballProfile", {}),
+            "nationalRank": rank,
+            "positionRank": position_counts[position],
+            "stateRank": state_rank,
+            "rankBand": band["id"],
+            "starRating": star,
+            "position": position,
+            "archetype": candidate["archetype"],
+            "archetypeDisplay": candidate["archetype"],
+            "profileType": candidate["profileType"],
+            "readinessScore": candidate["scores"]["readiness"],
+            "physicalScore": candidate["scores"]["physical"],
+            "technicalScore": candidate["scores"]["technical"],
+            "mentalScore": candidate["scores"]["mental"],
+            "ceilingScore": candidate["scores"]["ceiling"],
+            "evaluationConfidence": candidate["scores"]["confidence"],
+            "bodyComposition": candidate["bodyComposition"],
+        }
+        generated["gameFields"] = {
+            **generated.get("gameFields", {}),
+            "ratings": final_ratings,
+            "developmentTrait": candidate["developmentTrait"],
+            "qualityModifier": candidate["qualityModifier"],
+            "heightInches": candidate["height"],
+            "weightLbs": candidate["weight"],
+            "encodedWeight": encode_weight_lbs(candidate["weight"]),
+        }
+        generated["generationIntent"] = {
+            **generated.get("generationIntent", {}),
+            "seed": seed,
+            "configId": normalized.get("id"),
+            "profileType": candidate["profileType"],
+            "rankBand": band["id"],
+            "starRating": star,
+            "generationalFreshman": bool(candidate["generationalFreshman"]),
+            "qualityScore": round(candidate["qualityScore"], 4),
+            "qualityModifier": candidate["qualityModifier"],
+        }
+        generated_writes, diffs, skipped = preview_write_diffs(profile, generated, normalized)
+        generated["gameFields"]["generatedWrites"] = generated_writes
+        generated["gameFields"]["generatedDiffs"] = diffs
+        all_diffs.extend(diffs)
+        skipped_fields.update(skipped)
+        generated_profiles.append(generated)
+        star_counts[star] = star_counts.get(star, 0) + 1
+        rank_band_counts[band["id"]] = rank_band_counts.get(band["id"], 0) + 1
+        development_counts[candidate["developmentTrait"]] = development_counts.get(candidate["developmentTrait"], 0) + 1
+        position_summary[position] = position_summary.get(position, 0) + 1
+        quality_counts[candidate["qualityModifier"]] = quality_counts.get(candidate["qualityModifier"], 0) + 1
+        rare_max = band.get("rareMaxOverall")
+        if isinstance(rare_max, int) and final_ratings["overall"] > rare_max:
+            rare_overall_count += 1
+
+    class_budget_summary["generationalFreshman"]["actual"] = sum(
+        1
+        for profile in generated_profiles
+        if profile.get("generationIntent", {}).get("generationalFreshman")
+    )
+    class_budget_summary["eliteDevelopment"]["actual"] = development_counts.get("College_Elite", 0)
+    class_budget_summary["Gem"]["actual"] = quality_counts.get("Gem", 0)
+    class_budget_summary["Bust"]["actual"] = quality_counts.get("Bust", 0)
+
+    validation_report = validate_generated_preview_class(generated_profiles, normalized, all_diffs)
+    errors: list[str] = list(validation_report["errors"])
+    warnings.extend(validation_report["warnings"])
+    max_rare_allowed = normalized.get("validation", {}).get("maxRareOverallCount", 0)
+    if rare_overall_count > max_rare_allowed:
+        errors.append(f"Generated rare overall count {rare_overall_count} exceeds maxRareOverallCount {max_rare_allowed}")
+    if skipped_fields:
+        warnings.append(f"{len(skipped_fields)} generated field change(s) were skipped by locks or field gates")
+    diff_field_summary = summarize_preview_diffs(all_diffs)
+    budget_consumers = summarize_budget_consumers(generated_profiles)
+    config_hash = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode("utf-8")).hexdigest().upper()
+    preview_material = {
+        "saveFingerprint": joined.get("saveFingerprint", ""),
+        "seed": seed,
+        "configHash": config_hash,
+        "diffCount": len(all_diffs),
+        "recruits": [
+            {
+                "recruitId": item.get("recruitId"),
+                "rank": item.get("footballProfile", {}).get("nationalRank"),
+                "overall": item.get("gameFields", {}).get("ratings", {}).get("overall"),
+            }
+            for item in generated_profiles
+        ],
+    }
+    preview_id = hashlib.sha256(json.dumps(preview_material, sort_keys=True).encode("utf-8")).hexdigest().upper()
+    return {
+        "previewId": preview_id,
+        "configHash": config_hash,
+        "saveFingerprint": joined.get("saveFingerprint", ""),
+        "seed": seed,
+        "valid": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "summary": {
+            "count": count,
+            "classStrength": round(class_strength, 4),
+            "rankBands": rank_band_counts,
+            "stars": star_counts,
+            "positions": position_summary,
+            "development": development_counts,
+            "qualityModifier": quality_counts,
+            "budgets": class_budget_summary,
+            "budgetConsumers": budget_consumers,
+            "diffFields": diff_field_summary,
+            "diffCount": len(all_diffs),
+            "skippedFieldCount": len(skipped_fields),
+            "validationErrorCount": len(errors),
+            "validationWarningCount": len(validation_report["warnings"]),
+        },
+        "validationReport": validation_report,
+        "recruits": generated_profiles,
+        "diffs": all_diffs,
+        "skippedFields": sorted(skipped_fields),
+        "normalizedConfig": normalized,
+        "fieldCapabilities": field_capabilities(),
+    }
 
 KEY_LABELS = {
     PLAYER_INTERNAL_KEY: "Internal ID",
@@ -1156,9 +3532,58 @@ def list_recruits_from_payload(payload: bytes, limit: int = 1000, offset: int = 
     }
 
 
-def patch_recruit_payload(payload: bytes, row_id: str, changes: dict) -> tuple[bytes, dict]:
+def joined_recruit_profiles_from_payload(
+    payload: bytes,
+    save_fingerprint: str,
+    save_name: str = "",
+    limit: int = 1000,
+    offset: int = 0,
+) -> dict:
+    with tempfile.TemporaryDirectory(prefix="cfb27-joined-recruits-") as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        input_path = temp_dir / "input.frk"
+        input_path.write_bytes(payload)
+        result = run_franchise_helper(
+            ["joined", str(input_path), str(max(1, min(limit, 7600))), str(max(0, offset))],
+            timeout=120,
+        )
+
+    for profile in result.get("recruits", []):
+        source = profile.setdefault("source", {})
+        source["saveFingerprint"] = save_fingerprint
+        source["saveName"] = save_name
+        recruit_row = source.get("recruitRow")
+        player_row = source.get("playerRow")
+        sidecar_record_id = f"{save_fingerprint[:12]}:R{recruit_row}:P{player_row}"
+        profile["sidecar"] = {
+            "recordId": sidecar_record_id,
+            "keyFields": ["saveFingerprint", "recruitRow", "playerRow"],
+            "storage": "sidecars/{saveName}.{saveFingerprint}.json",
+        }
+        intent = profile.setdefault("generationIntent", {})
+        intent["sidecarRecordId"] = sidecar_record_id
+    return {
+        **result,
+        "saveFingerprint": save_fingerprint,
+        "fieldCapabilities": field_capabilities(),
+        "sidecar": {
+            "directory": str(SIDECAR_DIR),
+            "fileName": f"{save_name}.{save_fingerprint}.json" if save_name else f"{save_fingerprint}.json",
+            "keyStrategy": "save fingerprint plus recruit row plus player row",
+            "recordIdFormat": "<fingerprint12>:R<recruitRow>:P<playerRow>",
+            "writeTiming": "created during future generator apply, not during preview load",
+        },
+        "notes": (
+            "Read-only normalized Recruit plus linked Player profiles for generator preview. "
+            "Generation writes remain empty until config, validation, sidecar, and apply flows are implemented."
+        ),
+    }
+
+
+def patch_recruit_payload(payload: bytes, row_id: str, changes: dict, mode: str = "manual") -> tuple[bytes, dict]:
     if not isinstance(changes, dict) or not changes:
         raise AppError("No changes supplied")
+    validate_recruit_patch_capabilities(changes, mode=mode)
     with tempfile.TemporaryDirectory(prefix="cfb27-recruit-patch-") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
         input_path = temp_dir / "input.frk"
@@ -1176,6 +3601,404 @@ def patch_recruit_payload(payload: bytes, row_id: str, changes: dict) -> tuple[b
         if not output_path.exists():
             raise AppError("Recruit patch did not produce an output payload", 500)
         return output_path.read_bytes(), result.get("player", {})
+
+
+def patch_recruits_payload(payload: bytes, patches: list[dict], mode: str = "generator") -> tuple[bytes, list[dict]]:
+    if not patches:
+        return payload, []
+    normalized_patches: list[dict] = []
+    seen_rows: set[str] = set()
+    for patch in patches:
+        row_id = str(patch.get("id", ""))
+        changes = patch.get("changes")
+        if not row_id:
+            raise AppError("Batch patch row id is required")
+        if row_id in seen_rows:
+            raise AppError(f"Recruit row {row_id} was supplied more than once")
+        seen_rows.add(row_id)
+        if not isinstance(changes, dict) or not changes:
+            raise AppError(f"No changes supplied for recruit row {row_id}")
+        validate_recruit_patch_capabilities(changes, mode=mode)
+        normalized_patches.append({"id": row_id, "changes": changes})
+
+    with tempfile.TemporaryDirectory(prefix="cfb27-recruit-batch-patch-") as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        input_path = temp_dir / "input.frk"
+        output_path = temp_dir / "output.frk"
+        patch_path = temp_dir / "patches.json"
+        input_path.write_bytes(payload)
+        patch_path.write_text(json.dumps({"patches": normalized_patches}), encoding="ascii")
+        result = run_franchise_helper(
+            ["patch-batch", str(input_path), str(patch_path), str(output_path)],
+            timeout=240,
+        )
+        if not output_path.exists():
+            raise AppError("Recruit batch patch did not produce an output payload", 500)
+        return output_path.read_bytes(), result.get("players", [])
+
+
+def recruit_patch_value_from_profile(profile: dict, key: str) -> object:
+    football = profile.get("footballProfile", {})
+    game = profile.get("gameFields", {})
+    identity = profile.get("identity", {})
+    ratings = game.get("ratings", {})
+    if key == "national_rank":
+        return football.get("nationalRank")
+    if key == "position_rank":
+        return football.get("positionRank")
+    if key == "state_rank":
+        return football.get("stateRank")
+    if key == "position":
+        return football.get("position")
+    if key == "dev_trait":
+        return game.get("developmentTrait")
+    if key == "height_inches":
+        return game.get("heightInches")
+    if key == "weight_lbs":
+        return game.get("weightLbs")
+    if key == "first_name":
+        return identity.get("firstName")
+    if key == "last_name":
+        return identity.get("lastName")
+    if key in ratings:
+        return ratings.get(key)
+    return None
+
+
+def build_generator_apply_patches(preview: dict) -> list[dict]:
+    patches: list[dict] = []
+    for profile in preview.get("recruits", []):
+        changes = profile.get("gameFields", {}).get("generatedWrites", {})
+        if not changes:
+            continue
+        recruit_row = profile.get("source", {}).get("recruitRow")
+        if recruit_row is None:
+            raise AppError("Generated recruit is missing source recruit row", 500)
+        validate_recruit_patch_capabilities(changes, mode="generator")
+        patches.append(
+            {
+                "id": str(recruit_row),
+                "recruitId": profile.get("recruitId"),
+                "playerId": profile.get("playerId"),
+                "source": profile.get("source", {}),
+                "changes": changes,
+            }
+        )
+    return patches
+
+
+def compare_generator_read_back(preview: dict, read_back: dict) -> list[dict]:
+    by_recruit_row = {
+        str(profile.get("source", {}).get("recruitRow")): profile
+        for profile in read_back.get("recruits", [])
+    }
+    mismatches: list[dict] = []
+    for profile in preview.get("recruits", []):
+        changes = profile.get("gameFields", {}).get("generatedWrites", {})
+        if not changes:
+            continue
+        recruit_row = str(profile.get("source", {}).get("recruitRow"))
+        actual_profile = by_recruit_row.get(recruit_row)
+        if not actual_profile:
+            mismatches.append(
+                {
+                    "recruitId": profile.get("recruitId"),
+                    "recruitRow": recruit_row,
+                    "field": "*",
+                    "expected": "present",
+                    "actual": "missing",
+                }
+            )
+            continue
+        for key, expected in changes.items():
+            actual = recruit_patch_value_from_profile(actual_profile, key)
+            if actual != expected:
+                mismatches.append(
+                    {
+                        "recruitId": profile.get("recruitId"),
+                        "playerId": profile.get("playerId"),
+                        "recruitRow": recruit_row,
+                        "field": key,
+                        "expected": expected,
+                        "actual": actual,
+                    }
+                )
+    return mismatches
+
+
+def config_hash(config: dict) -> str:
+    return hashlib.sha256(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest().upper()
+
+
+def sidecar_record_from_profile(profile: dict, generation_version: str, normalized_config: dict, seed: str) -> dict:
+    football = profile.get("footballProfile", {})
+    game = profile.get("gameFields", {})
+    identity = profile.get("identity", {})
+    intent = profile.get("generationIntent", {})
+    source = profile.get("source", {})
+    appearance = game.get("appearanceToken", {})
+    return {
+        "id": profile.get("sidecar", {}).get("recordId"),
+        "player_id": source.get("playerRow"),
+        "recruit_id": source.get("recruitRow"),
+        "generation_version": generation_version,
+        "config_id": normalized_config.get("id"),
+        "config_hash": config_hash(normalized_config),
+        "seed": seed,
+        "national_rank": football.get("nationalRank"),
+        "position": football.get("position"),
+        "archetype": football.get("archetype"),
+        "profile_type": football.get("profileType"),
+        "body_composition": football.get("bodyComposition"),
+        "readiness_score": football.get("readinessScore"),
+        "physical_score": football.get("physicalScore"),
+        "technical_score": football.get("technicalScore"),
+        "mental_score": football.get("mentalScore"),
+        "ceiling_score": football.get("ceilingScore"),
+        "evaluation_confidence": football.get("evaluationConfidence"),
+        "initial_overall": game.get("ratings", {}).get("overall"),
+        "initial_weight": game.get("weightLbs"),
+        "initial_body_type": game.get("bodyType"),
+        "initial_ratings": game.get("ratings", {}),
+        "dev_trait": game.get("developmentTrait"),
+        "quality_modifier": game.get("qualityModifier"),
+        "ability_plan": intent.get("abilityPlan", []),
+        "cap_plan": intent.get("capPlan", []),
+        "appearance_token": appearance.get("genericHeadAssetName"),
+        "portrait_id": appearance.get("portrait"),
+        "name": f"{identity.get('firstName', '')} {identity.get('lastName', '')}".strip(),
+        "original_values": profile.get("originalFields", {}),
+        "generated_writes": game.get("generatedWrites", {}),
+        "skipped_fields": profile.get("skippedFields", []),
+    }
+
+
+def write_generator_apply_artifacts(
+    save_name: str,
+    preview: dict,
+    backup: dict,
+    read_back_mismatches: list[dict],
+    applied_recruit_count: int,
+    changed_field_count: int,
+) -> tuple[dict, dict]:
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    fingerprint = preview.get("saveFingerprint") or "UNKNOWN"
+    normalized_config = preview.get("normalizedConfig", {})
+    sidecar_records = [
+        sidecar_record_from_profile(profile, "0.1.0", normalized_config, preview.get("seed", ""))
+        for profile in preview.get("recruits", [])
+    ]
+    sidecar_payload = {
+        "schemaVersion": 1,
+        "saveName": save_name,
+        "saveFingerprint": fingerprint,
+        "previewId": preview.get("previewId"),
+        "configHash": preview.get("configHash"),
+        "seed": preview.get("seed"),
+        "createdAt": timestamp,
+        "recordCount": len(sidecar_records),
+        "records": sidecar_records,
+    }
+    report_payload = {
+        "schemaVersion": 1,
+        "saveName": save_name,
+        "saveFingerprint": fingerprint,
+        "previewId": preview.get("previewId"),
+        "configHash": preview.get("configHash"),
+        "seed": preview.get("seed"),
+        "createdAt": timestamp,
+        "appliedRecruitCount": applied_recruit_count,
+        "changedFieldCount": changed_field_count,
+        "backup": backup,
+        "summary": preview.get("summary", {}),
+        "validationReport": preview.get("validationReport", {}),
+        "skippedFields": preview.get("skippedFields", []),
+        "readBackMismatches": read_back_mismatches,
+    }
+
+    SIDECAR_DIR.mkdir(parents=True, exist_ok=True)
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    safe_save_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", save_name)
+    sidecar_path = SIDECAR_DIR / f"{safe_save_name}.{fingerprint}.{timestamp}.json"
+    report_path = REPORT_DIR / f"{safe_save_name}.{preview.get('previewId', 'preview')}.{timestamp}.json"
+    sidecar_path.write_text(json.dumps(sidecar_payload, indent=2, sort_keys=True), encoding="utf-8")
+    report_path.write_text(json.dumps(report_payload, indent=2, sort_keys=True), encoding="utf-8")
+    return (
+        {
+            "path": str(sidecar_path),
+            "recordCount": len(sidecar_records),
+            "sha256": hashlib.sha256(sidecar_path.read_bytes()).hexdigest().upper(),
+        },
+        {
+            "path": str(report_path),
+            "sha256": hashlib.sha256(report_path.read_bytes()).hexdigest().upper(),
+            "validationErrorCount": len(report_payload["validationReport"].get("errors", [])),
+            "validationWarningCount": len(report_payload["validationReport"].get("warnings", [])),
+        },
+    )
+
+
+def generator_artifact_policy() -> dict:
+    return {
+        "storage": "app-local-json",
+        "sidecarDirectory": str(SIDECAR_DIR),
+        "reportDirectory": str(REPORT_DIR),
+        "gitIgnored": True,
+        "naming": "{saveName}.{saveFingerprintOrPreviewId}.{timestamp}.json",
+        "retention": "manual cleanup through /api/generator/artifacts/cleanup",
+    }
+
+
+def artifact_entry(path: Path, kind: str) -> dict:
+    stat = path.stat()
+    return {
+        "kind": kind,
+        "name": path.name,
+        "path": str(path),
+        "size": stat.st_size,
+        "modified": stat.st_mtime,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest().upper(),
+    }
+
+
+def generator_artifact_directory(kind: str) -> Path:
+    if kind == "sidecar":
+        return SIDECAR_DIR
+    if kind == "report":
+        return REPORT_DIR
+    raise AppError("Artifact kind must be sidecar or report")
+
+
+def generator_artifact_summary(kind: str, payload: object) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    if kind == "sidecar":
+        return {
+            "saveName": payload.get("saveName"),
+            "saveFingerprint": payload.get("saveFingerprint"),
+            "previewId": payload.get("previewId"),
+            "configHash": payload.get("configHash"),
+            "seed": payload.get("seed"),
+            "createdAt": payload.get("createdAt"),
+            "recordCount": payload.get("recordCount") or len(payload.get("records", [])),
+        }
+    validation = payload.get("validationReport", {})
+    if not isinstance(validation, dict):
+        validation = {}
+    return {
+        "saveName": payload.get("saveName"),
+        "saveFingerprint": payload.get("saveFingerprint"),
+        "previewId": payload.get("previewId"),
+        "configHash": payload.get("configHash"),
+        "seed": payload.get("seed"),
+        "createdAt": payload.get("createdAt"),
+        "appliedRecruitCount": payload.get("appliedRecruitCount"),
+        "changedFieldCount": payload.get("changedFieldCount"),
+        "validationValid": validation.get("valid"),
+        "validationErrorCount": len(validation.get("errors", [])),
+        "validationWarningCount": len(validation.get("warnings", [])),
+        "readBackMismatchCount": len(payload.get("readBackMismatches", [])),
+    }
+
+
+def get_generator_artifact(kind: str, name: str) -> dict:
+    if not name or Path(name).name != name:
+        raise AppError("Artifact name must be a file name")
+    directory = generator_artifact_directory(kind).resolve()
+    path = (directory / name).resolve()
+    try:
+        path.relative_to(directory)
+    except ValueError as exc:
+        raise AppError("Artifact path escaped managed directory") from exc
+    if not path.is_file() or path.suffix.lower() != ".json":
+        raise AppError("Artifact not found", 404)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise AppError(f"Artifact JSON is invalid: {exc}") from exc
+    entry = artifact_entry(path, kind)
+    return {
+        "artifact": entry,
+        "summary": generator_artifact_summary(kind, payload),
+        "data": payload,
+    }
+
+
+def list_generator_artifacts(limit: int = 200) -> dict:
+    artifacts: list[dict] = []
+    for kind, directory in (("sidecar", SIDECAR_DIR), ("report", REPORT_DIR)):
+        if not directory.exists():
+            continue
+        for path in directory.glob("*.json"):
+            if path.is_file():
+                artifacts.append(artifact_entry(path, kind))
+    artifacts.sort(key=lambda item: item["modified"], reverse=True)
+    return {
+        "policy": generator_artifact_policy(),
+        "count": len(artifacts),
+        "artifacts": artifacts[: max(1, min(limit, 1000))],
+    }
+
+
+def cleanup_generator_artifacts(keep_latest: int = 25) -> dict:
+    keep = max(0, min(int(keep_latest), 1000))
+    deleted: list[dict] = []
+    kept: list[dict] = []
+    for kind, directory in (("sidecar", SIDECAR_DIR), ("report", REPORT_DIR)):
+        if not directory.exists():
+            continue
+        files = sorted(
+            [path for path in directory.glob("*.json") if path.is_file()],
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        for index, path in enumerate(files):
+            entry = artifact_entry(path, kind)
+            if index < keep:
+                kept.append(entry)
+                continue
+            try:
+                path.relative_to(directory)
+            except ValueError as exc:
+                raise AppError("Artifact cleanup path escaped managed directory", 500) from exc
+            path.unlink()
+            deleted.append(entry)
+    return {
+        "policy": generator_artifact_policy(),
+        "keepLatestPerKind": keep,
+        "deletedCount": len(deleted),
+        "keptCount": len(kept),
+        "deleted": deleted,
+    }
+
+
+def generator_patch_export_payload(preview: dict, patches: list[dict]) -> dict:
+    patch_items = [
+        {
+            "id": patch["id"],
+            "recruitId": patch.get("recruitId"),
+            "playerId": patch.get("playerId"),
+            "source": patch.get("source", {}),
+            "changes": patch.get("changes", {}),
+        }
+        for patch in patches
+    ]
+    return {
+        "dryRun": True,
+        "previewId": preview.get("previewId"),
+        "configHash": preview.get("configHash"),
+        "saveFingerprint": preview.get("saveFingerprint"),
+        "seed": preview.get("seed"),
+        "valid": preview.get("valid"),
+        "appliedRecruitCount": len(patch_items),
+        "changedFieldCount": sum(len(item["changes"]) for item in patch_items),
+        "patches": patch_items,
+        "summary": preview.get("summary", {}),
+        "validationReport": preview.get("validationReport", {}),
+        "skippedFields": preview.get("skippedFields", []),
+        "fieldCapabilities": preview.get("fieldCapabilities", field_capabilities()),
+        "artifactPolicy": generator_artifact_policy(),
+    }
 
 
 class SaveStore:
@@ -1295,6 +4118,168 @@ class SaveStore:
             "file": self.describe_file(path, include_player_count=False),
             **result,
         }
+
+    def get_joined_recruits(self, name: str, limit: int = 1000, offset: int = 0) -> dict:
+        path, container = self.load_container(name)
+        fingerprint = hashlib.sha256(container.decompressed_payload).hexdigest().upper()
+        result = joined_recruit_profiles_from_payload(
+            container.decompressed_payload,
+            save_fingerprint=fingerprint,
+            save_name=path.name,
+            limit=limit,
+            offset=offset,
+        )
+        return {
+            "file": self.describe_file(path, include_player_count=False),
+            **result,
+        }
+
+    def preview_generator(self, name: str, config: dict, seed: str, locks: dict | None = None) -> dict:
+        path, container = self.load_container(name)
+        fingerprint = hashlib.sha256(container.decompressed_payload).hexdigest().upper()
+        joined = joined_recruit_profiles_from_payload(
+            container.decompressed_payload,
+            save_fingerprint=fingerprint,
+            save_name=path.name,
+            limit=7600,
+            offset=0,
+        )
+        return {
+            "file": self.describe_file(path, include_player_count=False),
+            **generate_recruit_preview_from_profiles(joined, config, seed, locks=locks),
+        }
+
+    def apply_generator(
+        self,
+        name: str,
+        config: dict,
+        seed: str,
+        preview_id: str,
+        config_hash_value: str,
+        confirm: bool,
+        locks: dict | None = None,
+    ) -> dict:
+        if confirm is not True:
+            raise AppError("confirm must be true before applying generated recruits", 400)
+        if not isinstance(config, dict):
+            raise AppError("config is required for server-side preview regeneration", 400)
+        if not isinstance(preview_id, str) or not preview_id:
+            raise AppError("previewId is required", 400)
+        if not isinstance(config_hash_value, str) or not config_hash_value:
+            raise AppError("configHash is required", 400)
+
+        path, container = self.load_container(name)
+        before_fingerprint = hashlib.sha256(container.decompressed_payload).hexdigest().upper()
+        joined = joined_recruit_profiles_from_payload(
+            container.decompressed_payload,
+            save_fingerprint=before_fingerprint,
+            save_name=path.name,
+            limit=7600,
+            offset=0,
+        )
+        preview = generate_recruit_preview_from_profiles(joined, config, seed, locks=locks)
+        if preview.get("saveFingerprint") != before_fingerprint:
+            raise AppError("Save fingerprint changed while preparing apply; regenerate preview", 409)
+        if preview.get("previewId") != preview_id:
+            raise AppError("Preview no longer matches this save/config/seed; regenerate preview", 409)
+        if preview.get("configHash") != config_hash_value:
+            raise AppError("Config hash no longer matches the preview; regenerate preview", 409)
+        if not preview.get("valid") or preview.get("errors"):
+            raise AppError("Generated preview has blocking validation errors and cannot be applied", 422)
+        validation_report = preview.get("validationReport", {})
+        if not validation_report.get("valid", False):
+            raise AppError("Validation report has blocking errors and cannot be applied", 422)
+
+        patches = build_generator_apply_patches(preview)
+        changed_field_count = sum(len(patch["changes"]) for patch in patches)
+        new_payload, _ = patch_recruits_payload(container.decompressed_payload, patches, mode="generator")
+        rebuilt = container.rebuild(new_payload)
+        FBChunks.parse(rebuilt)
+        backup = self.create_backup(name)
+        path.write_bytes(rebuilt)
+        for cache_key in list(self._table_cache):
+            if cache_key.startswith(f"{path.name}:"):
+                self._table_cache.pop(cache_key, None)
+        for cache_key in list(self._occurrence_cache):
+            if cache_key.startswith(f"{path.name}:"):
+                self._occurrence_cache.pop(cache_key, None)
+
+        _, read_back_container = self.load_container(name)
+        read_back_joined = joined_recruit_profiles_from_payload(
+            read_back_container.decompressed_payload,
+            save_fingerprint=hashlib.sha256(read_back_container.decompressed_payload).hexdigest().upper(),
+            save_name=path.name,
+            limit=7600,
+            offset=0,
+        )
+        mismatches = compare_generator_read_back(preview, read_back_joined)
+        sidecar: dict | None = None
+        report: dict | None = None
+        artifact_error = ""
+        try:
+            sidecar, report = write_generator_apply_artifacts(
+                path.name,
+                preview,
+                backup,
+                mismatches,
+                applied_recruit_count=len(patches),
+                changed_field_count=changed_field_count,
+            )
+        except Exception as exc:
+            artifact_error = str(exc) or exc.__class__.__name__
+        return {
+            "applied": not mismatches,
+            "writeSucceeded": True,
+            "artifactWriteSucceeded": not artifact_error,
+            "artifactError": artifact_error,
+            "appliedRecruitCount": len(patches),
+            "changedFieldCount": changed_field_count,
+            "backup": backup,
+            "sidecar": sidecar,
+            "report": report,
+            "readBackMismatches": mismatches,
+            "previewId": preview.get("previewId"),
+            "configHash": preview.get("configHash"),
+            "saveFingerprintBefore": before_fingerprint,
+            "saveFingerprintAfter": read_back_joined.get("saveFingerprint"),
+        }
+
+    def export_generator_patch(
+        self,
+        name: str,
+        config: dict,
+        seed: str,
+        preview_id: str,
+        config_hash_value: str,
+        locks: dict | None = None,
+    ) -> dict:
+        if not isinstance(config, dict):
+            raise AppError("config is required for server-side patch export", 400)
+        if not isinstance(preview_id, str) or not preview_id:
+            raise AppError("previewId is required", 400)
+        if not isinstance(config_hash_value, str) or not config_hash_value:
+            raise AppError("configHash is required", 400)
+        path, container = self.load_container(name)
+        fingerprint = hashlib.sha256(container.decompressed_payload).hexdigest().upper()
+        joined = joined_recruit_profiles_from_payload(
+            container.decompressed_payload,
+            save_fingerprint=fingerprint,
+            save_name=path.name,
+            limit=7600,
+            offset=0,
+        )
+        preview = generate_recruit_preview_from_profiles(joined, config, seed, locks=locks)
+        if preview.get("previewId") != preview_id:
+            raise AppError("Preview no longer matches this save/config/seed; regenerate preview", 409)
+        if preview.get("configHash") != config_hash_value:
+            raise AppError("Config hash no longer matches the preview; regenerate preview", 409)
+        if not preview.get("valid") or preview.get("errors"):
+            raise AppError("Generated preview has blocking validation errors and cannot be exported", 422)
+        validation_report = preview.get("validationReport", {})
+        if not validation_report.get("valid", False):
+            raise AppError("Validation report has blocking errors and cannot be exported", 422)
+        patches = build_generator_apply_patches(preview)
+        return generator_patch_export_payload(preview, patches)
 
     def discover_tables(self, name: str | None = None, deep: bool = False) -> dict:
         paths = [self.validate_filename(name)] if name else self.editable_files()
@@ -1485,12 +4470,13 @@ class SaveStore:
             "player": updated_player,
         }
 
-    def patch_recruit(self, name: str, row_id: str, changes: dict) -> dict:
+    def patch_recruit(self, name: str, row_id: str, changes: dict, mode: str = "manual") -> dict:
         path, container = self.load_container(name)
         new_payload, updated_player = patch_recruit_payload(
             container.decompressed_payload,
             row_id=row_id,
             changes=changes,
+            mode=mode,
         )
         rebuilt = container.rebuild(new_payload)
         FBChunks.parse(rebuilt)
@@ -1559,6 +4545,28 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/files":
                 self.send_json(200, {"files": STORE.list_files()})
                 return
+            if parsed.path == "/api/generator/field-capabilities":
+                self.send_json(200, field_capabilities())
+                return
+            if parsed.path == "/api/generator/default-configs":
+                self.send_json(200, default_generator_configs())
+                return
+            if parsed.path == "/api/generator/artifacts":
+                limit = int(query_params.get("limit", ["200"])[0])
+                self.send_json(200, list_generator_artifacts(limit=limit))
+                return
+            if parsed.path == "/api/generator/artifact":
+                kind = query_params.get("kind", [""])[0]
+                name = query_params.get("name", [""])[0]
+                self.send_json(200, get_generator_artifact(kind, name))
+                return
+            if parsed.path.startswith("/api/generator/recruits/"):
+                parts = parsed.path.split("/")
+                if len(parts) == 5:
+                    limit = int(query_params.get("limit", ["1000"])[0])
+                    offset = int(query_params.get("offset", ["0"])[0])
+                    self.send_json(200, STORE.get_joined_recruits(parts[4], limit=limit, offset=offset))
+                    return
             if self.path == "/api/tables" or self.path.startswith("/api/tables?"):
                 self.send_json(200, STORE.discover_tables(deep="deep=1" in self.path))
                 return
@@ -1626,6 +4634,67 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            if self.path == "/api/generator/preview":
+                body = self.read_json_body()
+                file_name = body.get("file")
+                if not isinstance(file_name, str) or not file_name:
+                    raise AppError("file is required")
+                config = body.get("config")
+                seed = str(body.get("seed") or "default")
+                locks = body.get("locks")
+                if locks is not None and not isinstance(locks, dict):
+                    raise AppError("locks must be an object when supplied")
+                self.send_json(200, STORE.preview_generator(file_name, config, seed, locks=locks))
+                return
+            if self.path == "/api/generator/apply":
+                body = self.read_json_body()
+                file_name = body.get("file")
+                if not isinstance(file_name, str) or not file_name:
+                    raise AppError("file is required")
+                locks = body.get("locks")
+                if locks is not None and not isinstance(locks, dict):
+                    raise AppError("locks must be an object when supplied")
+                self.send_json(
+                    200,
+                    STORE.apply_generator(
+                        file_name,
+                        body.get("config"),
+                        str(body.get("seed") or "default"),
+                        str(body.get("previewId") or ""),
+                        str(body.get("configHash") or ""),
+                        body.get("confirm") is True,
+                        locks=locks,
+                    ),
+                )
+                return
+            if self.path == "/api/generator/patch-export":
+                body = self.read_json_body()
+                file_name = body.get("file")
+                if not isinstance(file_name, str) or not file_name:
+                    raise AppError("file is required")
+                locks = body.get("locks")
+                if locks is not None and not isinstance(locks, dict):
+                    raise AppError("locks must be an object when supplied")
+                self.send_json(
+                    200,
+                    STORE.export_generator_patch(
+                        file_name,
+                        body.get("config"),
+                        str(body.get("seed") or "default"),
+                        str(body.get("previewId") or ""),
+                        str(body.get("configHash") or ""),
+                        locks=locks,
+                    ),
+                )
+                return
+            if self.path == "/api/generator/config/validate":
+                body = self.read_json_body()
+                self.send_json(200, normalize_generator_config(body.get("config"), recruit_count=body.get("recruitCount")))
+                return
+            if self.path == "/api/generator/artifacts/cleanup":
+                body = self.read_json_body()
+                self.send_json(200, cleanup_generator_artifacts(keep_latest=int(body.get("keepLatestPerKind", 25))))
+                return
             if self.path.startswith("/api/backup/"):
                 parts = self.path.split("/")
                 if len(parts) == 4:
@@ -1662,8 +4731,11 @@ class Handler(BaseHTTPRequestHandler):
                 parts = self.path.split("/")
                 if len(parts) == 6 and parts[4] == "players":
                     body = self.read_json_body()
-                    changes = body.get("changes", body)
-                    self.send_json(200, STORE.patch_recruit(parts[3], parts[5], changes))
+                    mode = body.get("mode", "manual")
+                    changes = body.get("changes")
+                    if changes is None:
+                        changes = {key: value for key, value in body.items() if key != "mode"}
+                    self.send_json(200, STORE.patch_recruit(parts[3], parts[5], changes, mode=mode))
                     return
             raise AppError("Not found", 404)
         except Exception as exc:

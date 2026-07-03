@@ -5,6 +5,8 @@ node_modules/
 npm-debug.log*
 
 backups/
+reports/
+sidecars/
 server.log
 server.err.log
 
@@ -19,3 +21,6 @@ schema/*.xml
 .env
 .DS_Store
 Thumbs.db
+.requirements/
+.requirements/*.md
+.requirements/*.txt

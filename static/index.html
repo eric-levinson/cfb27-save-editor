@@ -3,178 +3,285 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>CFB27 Save Editor</title>
+    <title>CFB27 Recruit Generator</title>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
-    <main class="shell">
+    <main class="app-shell">
       <header class="topbar">
-        <div>
-          <h1>CFB27 Save Editor</h1>
+        <div class="title-block">
+          <h1>CFB27 Recruit Generator</h1>
           <p id="status">Loading save files...</p>
         </div>
         <div class="top-actions">
           <select id="fileSelect" aria-label="Save file"></select>
-          <button id="refreshBtn" type="button" title="Refresh files">Refresh</button>
-          <button id="backupBtn" type="button" title="Create backup">Backup</button>
+          <button id="refreshBtn" type="button">Refresh</button>
+          <button id="backupBtn" type="button">Backup</button>
+          <button id="artifactsBtn" type="button">Artifacts</button>
+          <button id="cleanupArtifactsBtn" type="button">Clean Artifacts</button>
         </div>
       </header>
 
-      <section class="metrics" id="metrics"></section>
-
-      <nav class="tabs" aria-label="Views">
-        <button id="playersTab" class="tab active" type="button">Players</button>
-        <button id="tablesTab" class="tab" type="button">Tables</button>
-        <button id="dynastyTab" class="tab" type="button">Recruits</button>
-        <button id="schemaTab" class="tab" type="button">Schema</button>
+      <nav class="view-tabs" aria-label="Workbench views">
+        <button type="button" data-view-tab="generator">Generator</button>
+        <button type="button" data-view-tab="configs">Configs</button>
+        <button type="button" data-view-tab="recruit-editor">Recruit Editor</button>
+        <button type="button" data-view-tab="save-tools">Save Tools</button>
+        <button type="button" data-view-tab="schema">Schema</button>
+        <button type="button" data-view-tab="tables">Tables</button>
+        <button type="button" data-view-tab="roster">Roster</button>
       </nav>
 
-      <section id="playersView" class="workbench">
-        <aside class="sidebar">
-          <label class="search">
-            <span>Search</span>
-            <input id="searchInput" type="search" autocomplete="off" placeholder="Name, hometown, id">
-          </label>
-          <div class="selection">
-            <div class="selection-title">Selected Player</div>
-            <div id="selectionName" class="selection-name">None</div>
-          </div>
-          <form id="editForm" class="editor-form">
-            <label>
-              <span>Internal ID</span>
-              <input name="internal_id" autocomplete="off">
-            </label>
-            <label>
-              <span>First Name</span>
-              <input name="first_name" autocomplete="off">
-            </label>
-            <label>
-              <span>Last Name</span>
-              <input name="last_name" autocomplete="off">
-            </label>
-            <label>
-              <span>Hometown</span>
-              <input name="hometown" autocomplete="off">
-            </label>
-            <div class="form-actions">
-              <button id="saveBtn" type="submit" disabled>Save</button>
-              <button id="revertBtn" type="button" disabled>Revert</button>
-            </div>
-          </form>
-          <div class="inspector">
-            <div class="selection-title">Inspector</div>
-            <pre id="inspectorBody">Select a row</pre>
-          </div>
-        </aside>
+      <section class="metrics" id="metrics" data-view="generator save-tools"></section>
 
-        <section class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Last</th>
-                <th>First</th>
-                <th>Hometown</th>
-                <th>Internal ID</th>
-                <th>Offset</th>
-              </tr>
-            </thead>
-            <tbody id="playersBody"></tbody>
-          </table>
-        </section>
+      <section class="toolbar" data-view="generator">
+        <input id="profileSearch" type="search" autocomplete="off" placeholder="Search rank, name, position, archetype, profile">
+        <input id="seedInput" type="text" autocomplete="off" value="2026-class-1" aria-label="Preview seed">
+        <button id="generatePreviewBtn" type="button">Generate Preview</button>
+        <button id="applyPreviewBtn" type="button" disabled>Apply Preview</button>
+        <button id="exportPatchBtn" type="button" disabled>Dry Run Patch</button>
+        <button id="reloadProfilesBtn" type="button">Reload Profiles</button>
       </section>
 
-      <section id="tablesView" class="tables-view hidden">
-        <aside class="table-list" id="tableList"></aside>
-        <section class="table-detail">
-          <header class="table-detail-head">
-            <div>
-              <h2 id="tableTitle">Discovered Tables</h2>
-              <p id="tableNote">Select a table to inspect records.</p>
-            </div>
-            <div class="table-actions">
-              <input id="tableSearch" type="search" placeholder="Filter visible rows">
-              <button id="reloadTablesBtn" type="button">Rescan</button>
-            </div>
-          </header>
-          <div class="table-wrap generic">
-            <table>
-              <thead id="genericHead"></thead>
-              <tbody id="genericBody"></tbody>
-            </table>
-          </div>
-        </section>
-      </section>
+      <section class="preview-summary" id="previewSummary" data-view="generator"></section>
 
-      <section id="dynastyView" class="dynasty-view hidden">
-        <header class="table-detail-head">
+      <section class="preview-browser" id="previewBrowser" data-view="generator"></section>
+
+      <section class="config-panel" data-view="generator configs">
+        <div class="config-head">
           <div>
-            <h2 id="dynastyTitle">Recruits</h2>
-            <p id="dynastyNote">Structured Recruit + Player tables. Skin tone and hair hints are read-only until CharacterVisuals offsets are verified.</p>
+            <h2 id="configName">Config</h2>
+            <p id="configMeta">Version -</p>
           </div>
-          <div class="table-actions">
-            <input id="dynastySearch" type="search" placeholder="Filter names, ranks, positions, rows">
-            <button id="reloadDynastyBtn" type="button">Reload</button>
+          <div class="config-actions">
+            <button id="validateConfigBtn" type="button">Validate</button>
+            <button id="importConfigBtn" type="button">Import JSON</button>
+            <button id="exportConfigBtn" type="button">Export JSON</button>
+            <button id="duplicateConfigBtn" type="button">Duplicate</button>
+            <button id="resetConfigBtn" type="button">Reset</button>
           </div>
-        </header>
-        <div class="table-wrap generic">
-          <table>
-            <thead id="dynastyHead"></thead>
-            <tbody id="dynastyBody"></tbody>
+        </div>
+        <form class="config-quick" id="configQuickForm">
+          <label>
+            <span>Name</span>
+            <input id="configDisplayName" type="text" autocomplete="off">
+          </label>
+          <label>
+            <span>ID</span>
+            <input id="configIdInput" type="text" autocomplete="off">
+          </label>
+          <label>
+            <span>5 Stars</span>
+            <input id="fiveStarCountInput" type="number" min="0" max="500">
+          </label>
+          <label>
+            <span>4 Stars</span>
+            <input id="fourStarCountInput" type="number" min="0" max="1000">
+          </label>
+          <label>
+            <span>Strength Min</span>
+            <input id="classStrengthMinInput" type="number" min="-1" max="1" step="0.05">
+          </label>
+          <label>
+            <span>Strength Max</span>
+            <input id="classStrengthMaxInput" type="number" min="-1" max="1" step="0.05">
+          </label>
+          <label>
+            <span>OVR Tol</span>
+            <input id="overallToleranceInput" type="number" min="0" max="10">
+          </label>
+          <label>
+            <span>Rare Max</span>
+            <input id="maxRareOverallInput" type="number" min="0" max="50">
+          </label>
+          <label>
+            <span>Star Write</span>
+            <select id="starRatingWriteSelect"></select>
+          </label>
+          <label>
+            <span>Archetype Write</span>
+            <select id="archetypeWriteSelect"></select>
+          </label>
+          <label>
+            <span>Quality Write</span>
+            <select id="qualityWriteSelect"></select>
+          </label>
+          <button id="applyConfigControlsBtn" type="submit">Apply Controls</button>
+        </form>
+        <div class="config-structured" id="configStructured"></div>
+        <input id="configFileInput" type="file" accept="application/json,.json" hidden>
+        <textarea id="configEditor" spellcheck="false" aria-label="Generator config JSON"></textarea>
+        <div class="config-warnings" id="configWarnings"></div>
+      </section>
+
+      <section class="support-panel" data-view="recruit-editor">
+        <div class="support-head">
+          <div>
+            <h2>Recruit Editor</h2>
+            <p>Manual structured Recruit + Player table edits for the selected dynasty save.</p>
+          </div>
+          <div class="support-actions">
+            <button id="loadRecruitEditorBtn" type="button">Load Recruits</button>
+            <button id="saveRecruitEditorBtn" type="button" disabled>Save Selected</button>
+          </div>
+        </div>
+        <div class="support-grid two-col">
+          <section>
+            <input id="recruitEditorSearch" type="search" autocomplete="off" placeholder="Search manual recruit rows">
+            <div class="pager">
+              <button id="recruitEditorPrevBtn" type="button">Prev</button>
+              <span id="recruitEditorPageInfo">Rows -</span>
+              <button id="recruitEditorNextBtn" type="button">Next</button>
+            </div>
+            <div class="support-table-wrap">
+              <table class="compact-table">
+                <thead id="recruitEditorHead"></thead>
+                <tbody id="recruitEditorBody"></tbody>
+              </table>
+            </div>
+          </section>
+          <aside class="support-detail" id="recruitEditorForm">
+            <div class="empty-state compact">Load recruits and select a row.</div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="support-panel" data-view="save-tools">
+        <div class="support-head">
+          <div>
+            <h2>Save Tools</h2>
+            <p>Save metadata, backups, generator artifacts, and parse checks.</p>
+          </div>
+          <div class="support-actions">
+            <button id="refreshSaveToolsBtn" type="button">Refresh Files</button>
+            <button id="backupSelectedSaveBtn" type="button">Backup Selected</button>
+            <select id="artifactKindFilter" aria-label="Artifact kind">
+              <option value="all">All Artifacts</option>
+              <option value="sidecar">Sidecars</option>
+              <option value="report">Reports</option>
+            </select>
+            <input id="artifactSearch" type="search" autocomplete="off" placeholder="Filter artifacts">
+            <button id="listArtifactsBtn" type="button">List Artifacts</button>
+          </div>
+        </div>
+        <div class="support-grid two-col">
+          <section class="support-table-wrap">
+            <table class="compact-table">
+              <thead><tr><th>File</th><th>Size</th><th>Modified</th><th>Parse</th></tr></thead>
+              <tbody id="saveToolsBody"></tbody>
+            </table>
+          </section>
+          <aside class="support-detail" id="artifactList">
+            <div class="empty-state compact">Artifact list has not been loaded.</div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="support-panel" data-view="schema">
+        <div class="support-head">
+          <div>
+            <h2>Schema</h2>
+            <p>Schema entries and save occurrences for research support.</p>
+          </div>
+          <div class="support-actions">
+            <input id="schemaQuery" type="search" autocomplete="off" value="Recruit" aria-label="Schema query">
+            <select id="schemaDomain" aria-label="Schema domain">
+              <option value="recruiting">Recruiting</option>
+              <option value="all">All</option>
+            </select>
+            <button id="schemaSearchBtn" type="button">Search</button>
+            <button id="schemaOccurrencesBtn" type="button">Occurrences</button>
+          </div>
+        </div>
+        <div class="support-table-wrap">
+          <table class="compact-table">
+            <thead id="schemaHead"></thead>
+            <tbody id="schemaBody"></tbody>
           </table>
         </div>
       </section>
 
-      <section id="schemaView" class="schema-view hidden">
-        <aside class="schema-list-wrap">
-          <div class="schema-search-row">
-            <input id="schemaSearch" type="search" placeholder="Search recruiting schema">
-            <button id="loadSchemaBtn" type="button">Search</button>
+      <section class="support-panel" data-view="tables">
+        <div class="support-head">
+          <div>
+            <h2>Tables</h2>
+            <p>Generic inferred table inspector for selected save files.</p>
           </div>
-          <div id="schemaList" class="schema-list"></div>
-        </aside>
-        <section class="schema-detail">
-          <header class="table-detail-head">
-            <div>
-              <h2 id="schemaTitle">Recruiting Schema</h2>
-              <p id="schemaNote">Select a schema entry to inspect attributes and matching save offsets.</p>
+          <div class="support-actions">
+            <label class="inline-check"><input id="deepTablesCheck" type="checkbox"> Deep scan</label>
+            <button id="discoverTablesBtn" type="button">Discover</button>
+          </div>
+        </div>
+        <div class="support-grid two-col">
+          <section class="support-table-wrap">
+            <table class="compact-table">
+              <thead><tr><th>File</th><th>Table</th><th>Rows</th><th>Confidence</th></tr></thead>
+              <tbody id="tableSummaryBody"></tbody>
+            </table>
+          </section>
+          <aside class="support-detail" id="tableRowsPanel">
+            <div class="empty-state compact">Select a discovered table.</div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="support-panel" data-view="roster">
+        <div class="support-head">
+          <div>
+            <h2>Roster</h2>
+            <p>Legacy roster TLV player scanner and fixed-width string editor.</p>
+          </div>
+          <div class="support-actions">
+            <button id="loadRosterBtn" type="button">Load Roster</button>
+            <button id="saveRosterPlayerBtn" type="button" disabled>Save Selected</button>
+          </div>
+        </div>
+        <div class="support-grid two-col">
+          <section>
+            <input id="rosterSearch" type="search" autocomplete="off" placeholder="Search roster players">
+            <div class="pager">
+              <button id="rosterPrevBtn" type="button">Prev</button>
+              <span id="rosterPageInfo">Rows -</span>
+              <button id="rosterNextBtn" type="button">Next</button>
             </div>
-            <button id="scanSchemaBtn" type="button">Scan Selected Save</button>
-          </header>
-          <div class="schema-grid">
-            <section class="schema-panel">
-              <h3>Save Occurrences</h3>
-              <div class="table-wrap schema-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Count</th>
-                      <th>Offsets</th>
-                      <th>Context</th>
-                    </tr>
-                  </thead>
-                  <tbody id="schemaOccurrences"></tbody>
-                </table>
-              </div>
-            </section>
-            <section class="schema-panel">
-              <h3>Attributes</h3>
-              <div class="table-wrap schema-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Idx</th>
-                      <th>Name</th>
-                      <th>Type</th>
-                      <th>Range/Default</th>
-                    </tr>
-                  </thead>
-                  <tbody id="schemaAttributes"></tbody>
-                </table>
-              </div>
-            </section>
-          </div>
+            <div class="support-table-wrap">
+              <table class="compact-table">
+                <thead><tr><th>First</th><th>Last</th><th>Hometown</th><th>Row</th></tr></thead>
+                <tbody id="rosterBody"></tbody>
+              </table>
+            </div>
+          </section>
+          <aside class="support-detail" id="rosterForm">
+            <div class="empty-state compact">Load roster players and select a row.</div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="workbench" data-view="generator">
+        <section class="profile-table-pane">
+          <table class="profile-table">
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Name</th>
+                <th>Pos</th>
+                <th>Archetype</th>
+                <th>Profile</th>
+                <th>OVR</th>
+                <th>Ready</th>
+                <th>Physical</th>
+                <th>Technical</th>
+                <th>Lock</th>
+                <th>Rows</th>
+              </tr>
+            </thead>
+            <tbody id="profilesBody"></tbody>
+          </table>
         </section>
+
+        <aside class="inspector" id="profileInspector">
+          <div class="empty-state">Select a recruit profile</div>
+        </aside>
       </section>
     </main>
 

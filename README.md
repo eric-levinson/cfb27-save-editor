@@ -322,6 +322,20 @@ The app follows these rules before writing a save:
 
 ## Useful Research Helpers
 
+Scan joined recruit/player link integrity and observed early-gate values from a decompressed FrTk payload:
+
+```powershell
+node franchise_helper.js research "$env:TEMP\cfb27-DYNASTY-JUL02-07h43m00-AUTOSAVE.frk" 1000
+```
+
+Write the same research scan to a durable JSON artifact:
+
+```powershell
+node franchise_helper.js research "$env:TEMP\cfb27-DYNASTY-JUL02-07h43m00-AUTOSAVE.frk" 1000 ".requirements\research\rg1-local-dynasty.json"
+```
+
+The research JSON includes RG-1 link integrity, observed values for early gated fields, field readability metadata, and a `missingFields` list for unsupported schema fields.
+
 Inspect known player ratings from a decompressed FrTk payload:
 
 ```powershell

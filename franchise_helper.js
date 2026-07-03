@@ -191,6 +191,41 @@ const RATING_FIELDS = [
   ["kick_return", "KRT", "Kick Return", "KickReturnRating", "Kicking", 0, 99],
 ];
 
+const RESEARCH_FIELDS = {
+  Recruit: [
+    "NationalRank",
+    "PositionRank",
+    "StateRank",
+    "QualityModifier",
+    "ProductionGrade",
+  ],
+  Player: [
+    "ProspectStarRating",
+    "PlayerType",
+    "CharacterBodyType",
+    "GenericHeadAssetName",
+    "PLYR_PORTRAIT",
+    "PLYR_GENERICHEAD",
+    "SkillGroupCap1",
+    "SkillGroupCap2",
+    "SkillGroupCap3",
+    "SkillGroupCap4",
+    "SkillGroupCap5",
+    "SkillGroupCap6",
+    "PhysicalAbility1",
+    "PhysicalAbility2",
+    "PhysicalAbility3",
+    "PhysicalAbility4",
+    "PhysicalAbility5",
+    "MentalAbility1",
+    "MentalAbility2",
+    "MentalAbility3",
+    "MentalAbilityRank1",
+    "MentalAbilityRank2",
+    "MentalAbilityRank3",
+  ],
+};
+
 function fail(message) {
   console.error(JSON.stringify({ error: message }));
   process.exit(1);
@@ -228,6 +263,10 @@ function poundsFromRaw(rawWeight) {
   const raw = Number(rawWeight);
   if (!Number.isFinite(raw)) return "";
   return raw + 160;
+}
+
+function rawWeightFromPounds(weightLbs) {
+  return weightLbs - 160;
 }
 
 function visualHintsFromHeadAsset(headAsset) {
@@ -363,6 +402,18 @@ async function readRecruitTables(franchise) {
   return { recruitTable, playerTable };
 }
 
+async function readRecruitResearchTables(franchise) {
+  const recruitTable = franchise.getTableByName(RECRUIT_TABLE);
+  const playerTable = franchise.getTableByName(PLAYER_TABLE);
+  if (!recruitTable || !playerTable) {
+    throw new Error("Recruit or Player table was not found in this save");
+  }
+
+  await recruitTable.readRecords();
+  await playerTable.readRecords();
+  return { recruitTable, playerTable };
+}
+
 function recruitPlayerPair(recruitRecord, recruitIndex, playerTable) {
   if (!recruitRecord || recruitRecord.isEmpty) return null;
   const ref = getReference(recruitRecord.Player);
@@ -459,6 +510,193 @@ function rowFromPair(pair) {
   return row;
 }
 
+function scoreFromRatings(values) {
+  const numeric = values
+    .map((value) => Number(value || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (!numeric.length) return 0;
+  const average = numeric.reduce((total, value) => total + value, 0) / numeric.length;
+  return Number(Math.max(0, Math.min(1, average / 99)).toFixed(2));
+}
+
+function inferBodyComposition(height, weightLbs, position) {
+  if (!height || !weightLbs) return "UNKNOWN";
+  const inches = Number(height);
+  const pounds = Number(weightLbs);
+  const compactPositions = new Set(["HB", "CB", "FS", "SS", "WR", "K", "P"]);
+  const bigPositions = new Set(["LT", "LG", "C", "RG", "RT", "DT"]);
+  if (bigPositions.has(position) && pounds >= 285) return "MASS";
+  if (compactPositions.has(position) && pounds <= 205) return "LEAN";
+  if (inches >= 76 && pounds <= 230) return "LONG";
+  if (pounds >= 245) return "POWER";
+  return "BALANCED";
+}
+
+function inferProfileType(row) {
+  const physical = scoreFromRatings([
+    row.speed,
+    row.acceleration,
+    row.strength,
+    row.agility,
+    row.jumping,
+  ]);
+  const technical = scoreFromRatings([
+    row.awareness,
+    row.catching,
+    row.tackle,
+    row.throw_accuracy_short,
+    row.run_block,
+    row.pass_block,
+  ]);
+  if (physical >= 0.9 && technical < 0.72) return "RarePhysicalFreak";
+  if (technical >= 0.82 && physical < 0.78) return "PolishedTechnician";
+  if (row.national_rank > 0 && row.national_rank <= 300) return "BlueChipBalanced";
+  return "Unassigned";
+}
+
+function rawRecruitFields(recruitRecord) {
+  const result = {};
+  for (const field of RESEARCH_FIELDS.Recruit) {
+    const value = recruitRecord[field];
+    if (value !== undefined) {
+      result[field] = value;
+    }
+  }
+  result.Player = recruitRecord.Player || "";
+  return result;
+}
+
+function rawPlayerFields(playerRecord) {
+  const result = {};
+  const fields = [
+    "FirstName",
+    "LastName",
+    "Height",
+    "Weight",
+    "Position",
+    "JerseyNum",
+    "TraitDevelopment",
+    "RecruitingDealbreaker",
+    "HomeState",
+    "Hometown",
+    "HomeTown",
+    "CharacterVisuals",
+    ...RESEARCH_FIELDS.Player,
+    ...RATING_FIELDS.map((field) => field[3]),
+  ];
+  for (const field of fields) {
+    const value = playerRecord[field];
+    if (value !== undefined) {
+      result[field] = value;
+    }
+  }
+  return result;
+}
+
+function joinedProfileFromPair(pair) {
+  const { recruitRecord, recruitIndex, playerRecord, playerIndex } = pair;
+  const row = rowFromPair(pair);
+  const ratings = {};
+  for (const [key] of RATING_FIELDS) {
+    ratings[key] = row[key];
+  }
+  const physicalScore = scoreFromRatings([
+    row.speed,
+    row.acceleration,
+    row.strength,
+    row.agility,
+    row.jumping,
+  ]);
+  const technicalScore = scoreFromRatings([
+    row.awareness,
+    row.catching,
+    row.short_route_running,
+    row.medium_route_running,
+    row.deep_route_running,
+    row.throw_accuracy_short,
+    row.throw_accuracy_mid,
+    row.throw_accuracy_deep,
+    row.run_block,
+    row.pass_block,
+    row.tackle,
+    row.man_coverage,
+    row.zone_coverage,
+  ]);
+  const mentalScore = scoreFromRatings([row.awareness, row.play_recognition, row.toughness]);
+  const readinessScore = scoreFromRatings([row.overall]);
+  const ceilingScore = scoreFromRatings([
+    row.overall,
+    row.speed,
+    row.acceleration,
+    row.strength,
+    row.throw_power,
+    row.jumping,
+  ]);
+  const profileType = inferProfileType(row);
+  return {
+    recruitId: `Recruit:${recruitIndex}`,
+    playerId: `Player:${playerIndex}`,
+    source: {
+      recruitRow: recruitIndex,
+      playerRow: playerIndex,
+      saveFingerprint: "",
+    },
+    identity: {
+      firstName: row.first_name,
+      lastName: row.last_name,
+      homeState: playerRecord.HomeState || "",
+      hometown: playerRecord.Hometown || playerRecord.HomeTown || "",
+    },
+    footballProfile: {
+      nationalRank: row.national_rank,
+      positionRank: row.position_rank,
+      stateRank: row.state_rank,
+      position: row.position,
+      archetype: row.player_type,
+      archetypeDisplay: row.archetype,
+      profileType,
+      readinessScore,
+      physicalScore,
+      technicalScore,
+      mentalScore,
+      ceilingScore,
+      evaluationConfidence: row.national_rank > 0 ? 0.75 : 0.5,
+      bodyComposition: inferBodyComposition(row.height_inches, row.weight_lbs, row.position),
+    },
+    gameFields: {
+      ratings,
+      developmentTrait: row.dev_trait,
+      qualityModifier: recruitRecord.QualityModifier || "",
+      starRating: playerRecord.ProspectStarRating || "",
+      bodyType: playerRecord.CharacterBodyType || "",
+      dealbreaker: row.dealbreaker,
+      jerseyNumber: row.jersey_number,
+      heightInches: row.height_inches,
+      weightLbs: row.weight_lbs,
+      appearanceToken: {
+        genericHeadAssetName: row.generic_head_asset_name,
+        genericHead: row.generic_head,
+        portrait: playerRecord.PLYR_PORTRAIT || "",
+        characterVisualsRef: row.character_visuals_ref,
+      },
+      generatedWrites: {},
+    },
+    locks: {
+      rowLocked: false,
+      fields: [],
+    },
+    generationIntent: {
+      profileType,
+      writePlan: {},
+      notes: [],
+    },
+    originalFields: {
+      Recruit: rawRecruitFields(recruitRecord),
+      Player: rawPlayerFields(playerRecord),
+    },
+  };
+}
+
 function sortRecruitRows(a, b) {
   const rankA = a.national_rank > 0 ? a.national_rank : Number.MAX_SAFE_INTEGER;
   const rankB = b.national_rank > 0 ? b.national_rank : Number.MAX_SAFE_INTEGER;
@@ -482,6 +720,241 @@ async function listRecruits(filePath, limit, offset) {
     offset: start,
     limit,
     players: rows.slice(start, stop),
+  };
+}
+
+async function joinedRecruitProfiles(filePath, limit, offset) {
+  const franchise = await loadFranchise(filePath);
+  const { recruitTable, playerTable } = await readRecruitResearchTables(franchise);
+  const pairs = [];
+  const unresolvedLinks = [];
+  const skippedUnpatchableLinks = [];
+  const linkedRecruitRowsByPlayer = new Map();
+  let activeRecruitRows = 0;
+
+  for (let index = 0; index < recruitTable.records.length; index += 1) {
+    const recruitRecord = recruitTable.records[index];
+    if (!recruitRecord || recruitRecord.isEmpty) continue;
+    activeRecruitRows += 1;
+
+    const ref = getReference(recruitRecord.Player);
+    const playerRecord =
+      ref && ref.tableId === playerTable.header.tableId
+        ? playerTable.records[ref.rowNumber]
+        : null;
+    if (!ref || !playerRecord || playerRecord.isEmpty) {
+      unresolvedLinks.push({
+        recruitRow: index,
+        playerReference: recruitRecord.Player || "",
+      });
+      continue;
+    }
+
+    const pair = recruitPlayerPair(recruitRecord, index, playerTable);
+    if (!pair) {
+      skippedUnpatchableLinks.push({
+        recruitRow: index,
+        playerReference: recruitRecord.Player || "",
+        reason: "linked player row is not patchable",
+      });
+      continue;
+    }
+
+    const recruitRows = linkedRecruitRowsByPlayer.get(ref.rowNumber) || [];
+    recruitRows.push(index);
+    linkedRecruitRowsByPlayer.set(ref.rowNumber, recruitRows);
+    pairs.push(pair);
+  }
+
+  const sharedPlayerLinks = [];
+  for (const [playerRow, recruitRows] of linkedRecruitRowsByPlayer.entries()) {
+    if (recruitRows.length > 1) {
+      sharedPlayerLinks.push({ playerRow, recruitRows });
+    }
+  }
+  if (unresolvedLinks.length || sharedPlayerLinks.length) {
+    throw new Error(
+      `Joined recruit profile validation failed: ${unresolvedLinks.length} unresolved links, `
+        + `${sharedPlayerLinks.length} duplicate player links`,
+    );
+  }
+
+  const profiles = pairs.map(joinedProfileFromPair);
+  profiles.sort((a, b) => {
+    const rankA = a.footballProfile.nationalRank > 0
+      ? a.footballProfile.nationalRank
+      : Number.MAX_SAFE_INTEGER;
+    const rankB = b.footballProfile.nationalRank > 0
+      ? b.footballProfile.nationalRank
+      : Number.MAX_SAFE_INTEGER;
+    if (rankA !== rankB) return rankA - rankB;
+    return `${a.identity.lastName} ${a.identity.firstName}`.localeCompare(
+      `${b.identity.lastName} ${b.identity.firstName}`,
+    );
+  });
+  const start = Math.max(0, offset || 0);
+  const stop = Math.min(profiles.length, start + Math.max(1, Math.min(limit || 1000, 7600)));
+  return {
+    count: profiles.length,
+    activeRecruitRows,
+    offset: start,
+    limit,
+    recruits: profiles.slice(start, stop),
+    validation: {
+      unresolvedLinkCount: unresolvedLinks.length,
+      sharedPlayerLinkCount: sharedPlayerLinks.length,
+      skippedUnpatchableLinkCount: skippedUnpatchableLinks.length,
+      skippedUnpatchableLinks: skippedUnpatchableLinks.slice(0, 25),
+      passed: true,
+    },
+    warnings: skippedUnpatchableLinks.length
+      ? [`Skipped ${skippedUnpatchableLinks.length} linked recruit row(s) that are not patchable`]
+      : [],
+  };
+}
+
+function recordObservedValue(summary, field, value, sample) {
+  if (value === undefined || value === null || value === "") return;
+  const key = String(value);
+  if (!summary[field]) {
+    summary[field] = { count: 0, values: {} };
+  }
+  const fieldSummary = summary[field];
+  fieldSummary.count += 1;
+  if (!fieldSummary.values[key]) {
+    fieldSummary.values[key] = { count: 0, samples: [] };
+  }
+  const valueSummary = fieldSummary.values[key];
+  valueSummary.count += 1;
+  if (valueSummary.samples.length < 5) {
+    valueSummary.samples.push(sample);
+  }
+}
+
+function hasReadableField(table, field) {
+  return table.records.some((record) => (
+    record
+    && !record.isEmpty
+    && field in record
+  ));
+}
+
+function researchFieldAvailability(recruitTable, playerTable, observedValues) {
+  const availability = {};
+  for (const [tableName, table, fields] of [
+    ["Recruit", recruitTable, RESEARCH_FIELDS.Recruit],
+    ["Player", playerTable, RESEARCH_FIELDS.Player],
+  ]) {
+    for (const field of fields) {
+      const qualified = `${tableName}.${field}`;
+      const observed = observedValues[qualified];
+      const observedValueCount = observed ? observed.count : 0;
+      availability[qualified] = {
+        table: tableName,
+        field,
+        available: hasReadableField(table, field) || observedValueCount > 0,
+        observedValueCount,
+        distinctValueCount: observed ? Object.keys(observed.values).length : 0,
+      };
+    }
+  }
+  return availability;
+}
+
+async function researchRecruitFields(filePath, sampleLimit) {
+  const franchise = await loadFranchise(filePath);
+  const { recruitTable, playerTable } = await readRecruitResearchTables(franchise);
+  const observedValues = {};
+  const unresolvedLinks = [];
+  const skippedUnpatchableLinks = [];
+  const linkedRecruitRowsByPlayer = new Map();
+  let activeRecruitRows = 0;
+  let validLinks = 0;
+
+  for (let index = 0; index < recruitTable.records.length; index += 1) {
+    const recruitRecord = recruitTable.records[index];
+    if (!recruitRecord || recruitRecord.isEmpty) continue;
+    activeRecruitRows += 1;
+
+    const ref = getReference(recruitRecord.Player);
+    const playerRecord =
+      ref && ref.tableId === playerTable.header.tableId
+        ? playerTable.records[ref.rowNumber]
+        : null;
+
+    const pair = ref && playerRecord && !playerRecord.isEmpty
+      ? recruitPlayerPair(recruitRecord, index, playerTable)
+      : null;
+
+    if (!ref || !playerRecord || playerRecord.isEmpty) {
+      unresolvedLinks.push({
+        recruitRow: index,
+        playerReference: recruitRecord.Player || "",
+        reason: "missing linked player row",
+      });
+      continue;
+    }
+    if (!pair) {
+      skippedUnpatchableLinks.push({
+        recruitRow: index,
+        playerReference: recruitRecord.Player || "",
+        reason: "linked player row is not patchable",
+      });
+      continue;
+    }
+
+    validLinks += 1;
+    const playerRows = linkedRecruitRowsByPlayer.get(ref.rowNumber) || [];
+    playerRows.push(index);
+    linkedRecruitRowsByPlayer.set(ref.rowNumber, playerRows);
+
+    if (sampleLimit && validLinks > sampleLimit) continue;
+    const sample = {
+      recruitRow: index,
+      playerRow: ref.rowNumber,
+      name: `${playerRecord.FirstName || ""} ${playerRecord.LastName || ""}`.trim(),
+      position: playerRecord.Position || "",
+      nationalRank: Number(recruitRecord.NationalRank || 0),
+    };
+
+    for (const field of RESEARCH_FIELDS.Recruit) {
+      recordObservedValue(observedValues, `Recruit.${field}`, recruitRecord[field], sample);
+    }
+    for (const field of RESEARCH_FIELDS.Player) {
+      recordObservedValue(observedValues, `Player.${field}`, playerRecord[field], sample);
+    }
+  }
+
+  const sharedPlayerLinks = [];
+  for (const [playerRow, recruitRows] of linkedRecruitRowsByPlayer.entries()) {
+    if (recruitRows.length > 1) {
+      sharedPlayerLinks.push({ playerRow, recruitRows });
+    }
+  }
+
+  const fieldAvailability = researchFieldAvailability(recruitTable, playerTable, observedValues);
+  const missingFields = Object.entries(fieldAvailability)
+    .filter(([, item]) => !item.available)
+    .map(([field]) => field);
+
+  return {
+    file: path.basename(filePath),
+    gates: {
+      "RG-1": {
+        activeRecruitRows,
+        validLinks,
+        unresolvedLinkCount: unresolvedLinks.length,
+        sharedPlayerLinkCount: sharedPlayerLinks.length,
+        skippedUnpatchableLinkCount: skippedUnpatchableLinks.length,
+        passed: unresolvedLinks.length === 0 && sharedPlayerLinks.length === 0,
+        unresolvedLinks: unresolvedLinks.slice(0, 25),
+        sharedPlayerLinks: sharedPlayerLinks.slice(0, 25),
+        skippedUnpatchableLinks: skippedUnpatchableLinks.slice(0, 25),
+      },
+    },
+    fieldAvailability,
+    missingFields,
+    observedValues,
   };
 }
 
@@ -540,7 +1013,7 @@ function applyPatch(pair, changes) {
   }
   if (Object.prototype.hasOwnProperty.call(changes, "weight_lbs")) {
     const pounds = cleanInt(changes.weight_lbs, "Weight", 160, 415);
-    playerRecord.Weight = pounds - 160;
+    playerRecord.Weight = rawWeightFromPounds(pounds);
   }
   if (Object.prototype.hasOwnProperty.call(changes, "national_rank")) {
     recruitRecord.NationalRank = cleanInt(changes.national_rank, "National rank", 0, 4500);
@@ -634,19 +1107,92 @@ async function patchRecruit(filePath, patchPath, outputPath) {
   return { player: rowFromPair(updatedPair) };
 }
 
+async function patchRecruitBatch(filePath, patchPath, outputPath) {
+  const patch = JSON.parse(fs.readFileSync(patchPath, "utf8"));
+  if (!Array.isArray(patch.patches) || !patch.patches.length) {
+    throw new Error("Batch patches are missing");
+  }
+
+  const franchise = await loadFranchise(filePath);
+  const { recruitTable, playerTable } = await readRecruitTables(franchise);
+  const seen = new Set();
+  for (const item of patch.patches) {
+    const recruitIndex = Number(item.id);
+    if (!Number.isInteger(recruitIndex) || recruitIndex < 0) {
+      throw new Error("Recruit id is invalid");
+    }
+    if (seen.has(recruitIndex)) {
+      throw new Error(`Recruit ${recruitIndex} was supplied more than once`);
+    }
+    seen.add(recruitIndex);
+    if (!item.changes || typeof item.changes !== "object") {
+      throw new Error(`Patch changes are missing for recruit ${recruitIndex}`);
+    }
+    const pair = recruitPlayerPair(recruitTable.records[recruitIndex], recruitIndex, playerTable);
+    if (!pair) {
+      throw new Error(`Recruit row ${recruitIndex} was not found or does not reference a valid player`);
+    }
+    applyPatch(pair, item.changes);
+  }
+
+  const unpacked = franchise.strategy.file.generateUnpackedContents(
+    franchise.tables,
+    franchise.unpackedFileContents,
+  );
+  fs.writeFileSync(outputPath, unpacked);
+
+  const verify = await loadFranchise(outputPath);
+  const { recruitTable: verifyRecruitTable, playerTable: verifyPlayerTable } = await readRecruitTables(verify);
+  const updated = [];
+  for (const recruitIndex of seen) {
+    const updatedPair = recruitPlayerPair(verifyRecruitTable.records[recruitIndex], recruitIndex, verifyPlayerTable);
+    updated.push(rowFromPair(updatedPair));
+  }
+  return { players: updated };
+}
+
 async function main() {
-  const [command, filePath, arg1, arg2, arg3] = process.argv.slice(2);
+  const [command, filePath, arg1, arg2] = process.argv.slice(2);
   if (!command || !filePath) {
-    fail("Usage: node franchise_helper.js <list|patch> <file> ...");
+    fail("Usage: node franchise_helper.js <list|joined|patch|patch-batch|research> <file> ...");
   }
   if (command === "list") {
     const result = await listRecruits(filePath, Number(arg1 || 1000), Number(arg2 || 0));
     console.log(JSON.stringify(result));
     return;
   }
+  if (command === "joined") {
+    const result = await joinedRecruitProfiles(filePath, Number(arg1 || 1000), Number(arg2 || 0));
+    console.log(JSON.stringify(result));
+    return;
+  }
   if (command === "patch") {
     if (!arg1 || !arg2) fail("Patch requires <patch.json> <output-file>");
     const result = await patchRecruit(filePath, arg1, arg2);
+    console.log(JSON.stringify(result));
+    return;
+  }
+  if (command === "patch-batch") {
+    if (!arg1 || !arg2) fail("Patch batch requires <patch.json> <output-file>");
+    const result = await patchRecruitBatch(filePath, arg1, arg2);
+    console.log(JSON.stringify(result));
+    return;
+  }
+  if (command === "research") {
+    const result = await researchRecruitFields(filePath, Number(arg1 || 0));
+    if (arg2) {
+      fs.mkdirSync(path.dirname(path.resolve(arg2)), { recursive: true });
+      fs.writeFileSync(arg2, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+      console.log(JSON.stringify({
+        file: result.file,
+        artifact: path.resolve(arg2),
+        gates: result.gates,
+        fieldAvailability: result.fieldAvailability,
+        missingFields: result.missingFields,
+        observedFieldCount: Object.keys(result.observedValues).length,
+      }));
+      return;
+    }
     console.log(JSON.stringify(result));
     return;
   }
