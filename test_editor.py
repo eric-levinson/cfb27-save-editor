@@ -150,11 +150,13 @@ class EditorTests(unittest.TestCase):
             target = recruits["players"][0]
             new_weight = target["weight_lbs"] + 1 if target["weight_lbs"] < 415 else target["weight_lbs"] - 1
             new_speed = target["speed"] + 1 if target["speed"] < 99 else target["speed"] - 1
+            new_jersey = 99 if target["jersey_number"] != 99 else 98
 
             result = store.patch_recruit(
                 file_name,
                 target["id"],
                 {
+                    "jersey_number": new_jersey,
                     "weight_lbs": new_weight,
                     "speed": new_speed,
                     "position": target["position"],
@@ -162,10 +164,12 @@ class EditorTests(unittest.TestCase):
                 },
             )
             self.assertTrue(Path(result["backup"]["backup"]).is_file())
+            self.assertEqual(result["player"]["jersey_number"], new_jersey)
             self.assertEqual(result["player"]["weight_lbs"], new_weight)
             self.assertEqual(result["player"]["speed"], new_speed)
             updated = store.get_recruits(file_name, limit=5)
             updated_target = next(row for row in updated["players"] if row["id"] == target["id"])
+            self.assertEqual(updated_target["jersey_number"], new_jersey)
             self.assertEqual(updated_target["weight_lbs"], new_weight)
             self.assertEqual(updated_target["speed"], new_speed)
 

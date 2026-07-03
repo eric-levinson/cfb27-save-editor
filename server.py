@@ -996,6 +996,7 @@ def recruit_columns() -> list[dict]:
         {"key": "first_name", "label": "First", "writable": True, "maxLength": 17},
         {"key": "last_name", "label": "Last", "writable": True, "maxLength": 21},
         {"key": "position", "label": "Pos", "writable": True, "type": "select", "options": RECRUIT_POSITION_OPTIONS},
+        {"key": "jersey_number", "label": "#", "title": "Jersey Number", "writable": True, "type": "number", "min": 0, "max": 99},
         {"key": "height_inches", "label": "Height In", "writable": True, "type": "number", "min": 48, "max": 96},
         {"key": "height_display", "label": "Height", "writable": False},
         {"key": "weight_lbs", "label": "Weight", "writable": True, "type": "number", "min": 160, "max": 415},
@@ -1074,7 +1075,7 @@ def list_recruits_from_payload(payload: bytes, limit: int = 1000, offset: int = 
         "columns": recruit_columns(),
         "notes": (
             "Structured Recruit + Player tables. Editable now: recruit ranks, first/last name, "
-            "position, height in inches, weight in pounds, head asset, and verified EA ratings. "
+            "position, jersey number, height in inches, weight in pounds, head asset, and verified EA ratings. "
             "Skin tone and hair hints are decoded from head asset names but stay read-only until "
             "the CharacterVisuals offsets are verified."
         ),

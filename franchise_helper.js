@@ -179,6 +179,7 @@ async function readRecruitTables(franchise) {
     "Height",
     "Weight",
     "Position",
+    "JerseyNum",
     "GenericHeadAssetName",
     "PLYR_GENERICHEAD",
     "CharacterVisuals",
@@ -222,6 +223,7 @@ function rowFromPair(pair) {
     first_name: playerRecord.FirstName || "",
     last_name: playerRecord.LastName || "",
     position: playerRecord.Position || "",
+    jersey_number: Number(playerRecord.JerseyNum || 0),
     height_inches: height,
     height_display: heightDisplay(height),
     weight_lbs: poundsFromRaw(rawWeight),
@@ -270,6 +272,7 @@ function applyPatch(pair, changes) {
     "first_name",
     "last_name",
     "position",
+    "jersey_number",
     "height_inches",
     "weight_lbs",
     "national_rank",
@@ -299,6 +302,9 @@ function applyPatch(pair, changes) {
   }
   if (Object.prototype.hasOwnProperty.call(changes, "height_inches")) {
     playerRecord.Height = cleanInt(changes.height_inches, "Height", 48, 96);
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "jersey_number")) {
+    playerRecord.JerseyNum = cleanInt(changes.jersey_number, "Jersey number", 0, 99);
   }
   if (Object.prototype.hasOwnProperty.call(changes, "weight_lbs")) {
     const pounds = cleanInt(changes.weight_lbs, "Weight", 160, 415);

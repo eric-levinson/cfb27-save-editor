@@ -16,6 +16,7 @@ The app runs on a Python stdlib HTTP server with a vanilla HTML/CSS/JS frontend.
   - first name
   - last name
   - position
+  - jersey number
   - height in inches
   - weight in pounds
   - head asset
