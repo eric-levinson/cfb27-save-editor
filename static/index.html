@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CFB27 Save Editor</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>CFB27 Save Editor</h1>
+          <p id="status">Loading save files...</p>
+        </div>
+        <div class="top-actions">
+          <select id="fileSelect" aria-label="Save file"></select>
+          <button id="refreshBtn" type="button" title="Refresh files">Refresh</button>
+          <button id="backupBtn" type="button" title="Create backup">Backup</button>
+        </div>
+      </header>
+
+      <section class="metrics" id="metrics"></section>
+
+      <nav class="tabs" aria-label="Views">
+        <button id="playersTab" class="tab active" type="button">Players</button>
+        <button id="tablesTab" class="tab" type="button">Tables</button>
+        <button id="dynastyTab" class="tab" type="button">Recruits</button>
+        <button id="schemaTab" class="tab" type="button">Schema</button>
+      </nav>
+
+      <section id="playersView" class="workbench">
+        <aside class="sidebar">
+          <label class="search">
+            <span>Search</span>
+            <input id="searchInput" type="search" autocomplete="off" placeholder="Name, hometown, id">
+          </label>
+          <div class="selection">
+            <div class="selection-title">Selected Player</div>
+            <div id="selectionName" class="selection-name">None</div>
+          </div>
+          <form id="editForm" class="editor-form">
+            <label>
+              <span>Internal ID</span>
+              <input name="internal_id" autocomplete="off">
+            </label>
+            <label>
+              <span>First Name</span>
+              <input name="first_name" autocomplete="off">
+            </label>
+            <label>
+              <span>Last Name</span>
+              <input name="last_name" autocomplete="off">
+            </label>
+            <label>
+              <span>Hometown</span>
+              <input name="hometown" autocomplete="off">
+            </label>
+            <div class="form-actions">
+              <button id="saveBtn" type="submit" disabled>Save</button>
+              <button id="revertBtn" type="button" disabled>Revert</button>
+            </div>
+          </form>
+          <div class="inspector">
+            <div class="selection-title">Inspector</div>
+            <pre id="inspectorBody">Select a row</pre>
+          </div>
+        </aside>
+
+        <section class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Last</th>
+                <th>First</th>
+                <th>Hometown</th>
+                <th>Internal ID</th>
+                <th>Offset</th>
+              </tr>
+            </thead>
+            <tbody id="playersBody"></tbody>
+          </table>
+        </section>
+      </section>
+
+      <section id="tablesView" class="tables-view hidden">
+        <aside class="table-list" id="tableList"></aside>
+        <section class="table-detail">
+          <header class="table-detail-head">
+            <div>
+              <h2 id="tableTitle">Discovered Tables</h2>
+              <p id="tableNote">Select a table to inspect records.</p>
+            </div>
+            <div class="table-actions">
+              <input id="tableSearch" type="search" placeholder="Filter visible rows">
+              <button id="reloadTablesBtn" type="button">Rescan</button>
+            </div>
+          </header>
+          <div class="table-wrap generic">
+            <table>
+              <thead id="genericHead"></thead>
+              <tbody id="genericBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="dynastyView" class="dynasty-view hidden">
+        <header class="table-detail-head">
+          <div>
+            <h2 id="dynastyTitle">Recruits</h2>
+            <p id="dynastyNote">Structured Recruit + Player tables. Skin tone and hair hints are read-only until CharacterVisuals offsets are verified.</p>
+          </div>
+          <div class="table-actions">
+            <input id="dynastySearch" type="search" placeholder="Filter names, ranks, positions, rows">
+            <button id="reloadDynastyBtn" type="button">Reload</button>
+          </div>
+        </header>
+        <div class="table-wrap generic">
+          <table>
+            <thead id="dynastyHead"></thead>
+            <tbody id="dynastyBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="schemaView" class="schema-view hidden">
+        <aside class="schema-list-wrap">
+          <div class="schema-search-row">
+            <input id="schemaSearch" type="search" placeholder="Search recruiting schema">
+            <button id="loadSchemaBtn" type="button">Search</button>
+          </div>
+          <div id="schemaList" class="schema-list"></div>
+        </aside>
+        <section class="schema-detail">
+          <header class="table-detail-head">
+            <div>
+              <h2 id="schemaTitle">Recruiting Schema</h2>
+              <p id="schemaNote">Select a schema entry to inspect attributes and matching save offsets.</p>
+            </div>
+            <button id="scanSchemaBtn" type="button">Scan Selected Save</button>
+          </header>
+          <div class="schema-grid">
+            <section class="schema-panel">
+              <h3>Save Occurrences</h3>
+              <div class="table-wrap schema-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Count</th>
+                      <th>Offsets</th>
+                      <th>Context</th>
+                    </tr>
+                  </thead>
+                  <tbody id="schemaOccurrences"></tbody>
+                </table>
+              </div>
+            </section>
+            <section class="schema-panel">
+              <h3>Attributes</h3>
+              <div class="table-wrap schema-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Idx</th>
+                      <th>Name</th>
+                      <th>Type</th>
+                      <th>Range/Default</th>
+                    </tr>
+                  </thead>
+                  <tbody id="schemaAttributes"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

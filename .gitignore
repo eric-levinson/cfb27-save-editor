@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+
+node_modules/
+npm-debug.log*
+
+backups/
+server.log
+server.err.log
+
+# Local save/game-derived generated data. Keep these on the machine that owns
+# the saves and game install; do not publish them.
+schema/*.bin
+schema/*.gz
+schema/*.json
+schema/*.xml
+!schema/README.md
+
+.env
+.DS_Store
+Thumbs.db

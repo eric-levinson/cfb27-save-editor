@@ -1,0 +1,16 @@
+{
+  "name": "cfb27-save-editor",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "python -m unittest -v test_editor.py",
+    "start": "python server.py --host 127.0.0.1 --port 8765"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "madden-franchise": "^3.8.0"
+  }
+}
