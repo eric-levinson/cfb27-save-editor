@@ -528,7 +528,10 @@ class EditorTests(unittest.TestCase):
             sum(1 for recruit in first["recruits"] if recruit["generationIntent"].get("generationalFreshman")),
             2,
         )
-        self.assertFalse(any(diff["field"] == "Player.ProspectStarRating" for diff in first["diffs"]))
+        self.assertTrue(any(diff["field"] == "Player.ProspectStarRating" for diff in first["diffs"]))
+        self.assertTrue(
+            any(item["field"] == "Player.ProspectStarRating" for item in first["summary"]["diffFields"])
+        )
         self.assertTrue(any("overall" in recruit["gameFields"]["generatedWrites"] for recruit in first["recruits"]))
         recruit_with_diffs = next(recruit for recruit in first["recruits"] if recruit["gameFields"]["generatedDiffs"])
         self.assertEqual(
@@ -618,9 +621,19 @@ class EditorTests(unittest.TestCase):
         self.assertNotIn("height", patch_keys)
         self.assertNotIn("weight", patch_keys)
         self.assertTrue({"dev_trait", "height_inches", "weight_lbs"} & patch_keys)
-        patched_payload, updated_players = patch_recruits_payload(payload, patches[:2], mode="generator")
+        sample_patches = patches[:2]
+        patched_payload, updated_players = patch_recruits_payload(payload, sample_patches, mode="generator")
         self.assertNotEqual(patched_payload, payload)
         self.assertEqual(len(updated_players), 2)
+        expected_stars = {
+            str(patch["source"]["recruitRow"]): patch["changes"].get("star_rating")
+            for patch in sample_patches
+            if patch["changes"].get("star_rating")
+        }
+        for player in updated_players:
+            expected_star = expected_stars.get(str(player["recruit_index"]))
+            if expected_star:
+                self.assertEqual(player.get("star_rating"), expected_star)
 
     def test_generator_apply_requires_matching_preview_and_writes_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -683,7 +696,7 @@ class EditorTests(unittest.TestCase):
             self.assertEqual(result["changedFieldCount"], 0)
             self.assertEqual(result["readBackMismatches"], [])
 
-    def test_generator_apply_non_empty_development_write_read_back_matches(self) -> None:
+    def test_generator_apply_development_writes_stay_preview_only(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             source = SAVE_DIR / "DYNASTY-JUL02-07h43m00-AUTOSAVE"
@@ -704,7 +717,8 @@ class EditorTests(unittest.TestCase):
                 preview = store.preview_generator(file_name, config, "non-empty-apply-seed")
                 original_bytes = (temp / file_name).read_bytes()
                 self.assertTrue(preview["valid"], preview["errors"])
-                self.assertGreater(preview["summary"]["diffCount"], 0)
+                self.assertEqual(preview["summary"]["diffCount"], 0)
+                self.assertGreater(preview["summary"]["skippedFieldCount"], 0)
 
                 result = store.apply_generator(
                     file_name,
@@ -720,13 +734,20 @@ class EditorTests(unittest.TestCase):
 
             self.assertTrue(result["applied"], result["readBackMismatches"])
             self.assertTrue(result["artifactWriteSucceeded"], result["artifactError"])
-            self.assertGreater(result["appliedRecruitCount"], 0)
-            self.assertGreater(result["changedFieldCount"], 0)
+            self.assertEqual(result["appliedRecruitCount"], 0)
+            self.assertEqual(result["changedFieldCount"], 0)
             self.assertEqual(result["readBackMismatches"], [])
             self.assertEqual(result["writeMode"], "copy")
             self.assertTrue(Path(result["targetPath"]).is_file())
             self.assertEqual((temp / file_name).read_bytes(), original_bytes)
-            self.assertNotEqual(Path(result["targetPath"]).read_bytes(), original_bytes)
+            self.assertEqual(Path(result["targetPath"]).read_bytes(), original_bytes)
+            source_container = FBChunks.parse(original_bytes)
+            target_bytes = Path(result["targetPath"]).read_bytes()
+            target_container = FBChunks.parse(target_bytes)
+            self.assertEqual(
+                target_bytes[target_container.payload_offset + target_container.chunk1_budget :],
+                original_bytes[source_container.payload_offset + source_container.chunk1_budget :],
+            )
 
     def test_generator_apply_backup_failure_leaves_save_unchanged(self) -> None:
         class FailingBackupStore(SaveStore):
@@ -819,7 +840,7 @@ class EditorTests(unittest.TestCase):
             config = default_generator_configs()["configs"][0]
             for key in list(config["writeFields"]):
                 config["writeFields"][key] = False
-            config["writeFields"]["developmentTrait"] = True
+            config["writeFields"]["body"] = True
             preview = store.preview_generator(file_name, config, "patch-export-seed")
             self.assertTrue(preview["valid"], preview["errors"])
             self.assertGreater(preview["summary"]["diffCount"], 0)
@@ -981,6 +1002,12 @@ class EditorTests(unittest.TestCase):
             with self.subTest(path=path.name):
                 container = FBChunks.parse(path.read_bytes())
                 self.assertGreater(len(container.decompressed_payload), 0)
+                self.assertGreater(container.chunk1_compressed_size, 0)
+                self.assertGreaterEqual(container.chunk1_budget, container.chunk1_compressed_size)
+                self.assertEqual(
+                    len(container.source),
+                    container.payload_offset + container.chunk1_compressed_size + len(container.tail),
+                )
 
     def test_no_edit_rebuild_reparses(self) -> None:
         store = SaveStore(SAVE_DIR)
@@ -990,6 +1017,15 @@ class EditorTests(unittest.TestCase):
                 rebuilt = container.rebuild(container.decompressed_payload)
                 reparsed = FBChunks.parse(rebuilt)
                 self.assertEqual(reparsed.decompressed_payload, container.decompressed_payload)
+                self.assertEqual(len(rebuilt), len(container.source))
+                self.assertEqual(
+                    rebuilt[container.payload_offset + container.chunk1_budget :],
+                    container.source[container.payload_offset + container.chunk1_budget :],
+                )
+                self.assertEqual(
+                    int.from_bytes(rebuilt[14:18], "little"),
+                    int.from_bytes(container.source[14:18], "little"),
+                )
 
     def test_patch_one_player_field_changes_only_expected_payload_text(self) -> None:
         roster = SAVE_DIR / "ROSTER-Official"
@@ -1010,6 +1046,11 @@ class EditorTests(unittest.TestCase):
         rebuilt = container.rebuild(patched)
         reparsed = FBChunks.parse(rebuilt)
         self.assertEqual(reparsed.decompressed_payload, patched)
+        self.assertEqual(len(rebuilt), len(container.source))
+        self.assertEqual(
+            rebuilt[container.payload_offset + container.chunk1_budget :],
+            container.source[container.payload_offset + container.chunk1_budget :],
+        )
 
     def test_discovers_roster_player_and_team_tables(self) -> None:
         roster = SAVE_DIR / "ROSTER-Official"

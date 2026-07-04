@@ -51,6 +51,19 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
         if tmp.exists():
             tmp.unlink()
 
+
+def compress_franchise_database(payload: bytes) -> tuple[bytes, str]:
+    try:
+        import deflate  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        compressed = zlib.compress(payload, level=9)
+        return compressed, "zlib"
+
+    compressed = deflate.zlib_compress(payload, 12)
+    if zlib.decompress(compressed) != payload:
+        raise AppError("libdeflate round-trip verification failed", 500)
+    return compressed, "libdeflate"
+
 KNOWN_PLAYER_FIELDS = {
     "internal_id": PLAYER_INTERNAL_KEY,
     "first_name": PLAYER_FIRST_KEY,
@@ -370,10 +383,11 @@ BASE_FIELD_CAPABILITIES = [
     {
         "field": "Player.TraitDevelopment",
         "owner": "Player",
-        "status": "writable",
-        "gate": "RG-2",
+        "status": "manual-writable",
+        "gate": "RG-2/RG-GameLoad",
         "manualWritable": True,
-        "notes": "Validated against known CFB development trait values.",
+        "safeToWrite": False,
+        "notes": "Read-back validated, but generator writes are held until disposable dynasty copies load in game.",
     },
     {
         "field": "Player.RecruitingDealbreaker",
@@ -410,9 +424,10 @@ BASE_FIELD_CAPABILITIES = [
     {
         "field": "Player.ProspectStarRating",
         "owner": "Player",
-        "status": "research",
+        "status": "writable",
         "gate": "RG-3",
-        "notes": "Needs one-star through five-star mapping before writes.",
+        "manualWritable": True,
+        "notes": "Rank-band enum writes are enabled for controlled game-load validation.",
     },
     {
         "field": "Player.PlayerType",
@@ -538,6 +553,7 @@ RECRUIT_PATCH_FIELD_CAPABILITY_MAP = {
     "height_inches": "Player.Height",
     "weight_lbs": "Player.Weight",
     "prospect_star_rating": "Player.ProspectStarRating",
+    "star_rating": "Player.ProspectStarRating",
     "player_type": "Player.PlayerType",
     "character_body_type": "Player.CharacterBodyType",
     "quality_modifier": "Recruit.QualityModifier",
@@ -937,7 +953,7 @@ DEFAULT_GENERATOR_CONFIG = {
         "ratings": True,
         "identity": True,
         "body": True,
-        "developmentTrait": True,
+        "developmentTrait": "after-research",
         "starRating": "after-research",
         "archetype": "after-research",
         "bodyType": "after-research",
@@ -2661,9 +2677,16 @@ class FBChunks:
     source: bytes
     header_size: int
     payload_size: int
+    payload_offset: int
+    chunk1_compressed_size: int
+    chunk1_budget: int
+    chunk1_size_field_offset: int
+    chunk1_size_field_matches: bool
     header: bytes
     compressed_payload: bytes
+    tail: bytes
     decompressed_payload: bytes
+    compression_method: str = "original"
 
     @classmethod
     def parse(cls, source: bytes) -> "FBChunks":
@@ -2678,39 +2701,65 @@ class FBChunks:
         if payload_size != len(source) - payload_offset:
             raise AppError("FBCHUNKS payload size does not match file size", 422)
 
+        chunk1_size_field_offset = payload_offset - 8
+        if chunk1_size_field_offset < 0 or chunk1_size_field_offset + 4 > len(source):
+            raise AppError("Invalid FBCHUNKS chunk size offset", 422)
+        chunk1_size_field = int.from_bytes(source[chunk1_size_field_offset : chunk1_size_field_offset + 4], "little")
         header = source[18:payload_offset]
-        compressed_payload = source[payload_offset:]
+        payload_bytes = source[payload_offset:]
+        leading_zero_tail = 0
         try:
-            decompressed_payload = zlib.decompress(compressed_payload)
+            decompressor = zlib.decompressobj()
+            decompressed_payload = decompressor.decompress(payload_bytes) + decompressor.flush()
         except zlib.error as exc:
             raise AppError(f"Could not decompress zlib payload: {exc}", 422) from exc
+        chunk1_compressed_size = len(payload_bytes) - len(decompressor.unused_data)
+        if chunk1_compressed_size <= 0 or chunk1_compressed_size > payload_size:
+            raise AppError("Invalid FBCHUNKS chunk 1 compressed size", 422)
+
+        compressed_payload = payload_bytes[:chunk1_compressed_size]
+        tail = payload_bytes[chunk1_compressed_size:]
+        while leading_zero_tail < len(tail) and tail[leading_zero_tail] == 0:
+            leading_zero_tail += 1
+        chunk1_budget = chunk1_compressed_size + leading_zero_tail
+        chunk1_size_field_matches = chunk1_size_field == chunk1_compressed_size
 
         return cls(
             source=source,
             header_size=header_size,
             payload_size=payload_size,
+            payload_offset=payload_offset,
+            chunk1_compressed_size=chunk1_compressed_size,
+            chunk1_budget=chunk1_budget,
+            chunk1_size_field_offset=chunk1_size_field_offset,
+            chunk1_size_field_matches=chunk1_size_field_matches,
             header=header,
             compressed_payload=compressed_payload,
+            tail=tail,
             decompressed_payload=decompressed_payload,
         )
 
     def rebuild(self, new_decompressed_payload: bytes) -> bytes:
-        new_compressed = zlib.compress(new_decompressed_payload, level=9)
-        new_source = bytearray(self.source[: 18 + self.header_size])
-        new_source[14:18] = len(new_compressed).to_bytes(4, "little")
+        new_compressed, method = compress_franchise_database(new_decompressed_payload)
+        if len(new_compressed) > self.chunk1_budget:
+            raise AppError(
+                "Recompressed database "
+                f"({len(new_compressed)} bytes via {method}) exceeds available chunk 1 space "
+                f"({self.chunk1_budget} bytes); refusing to overwrite CharacterVisuals",
+                422,
+            )
 
-        # College Football 27 uses the first metadata-header dword differently
-        # across files. Preserve the observed rule instead of forcing one value.
-        if self.header_size >= 4:
-            secondary = int.from_bytes(self.header[:4], "little")
-            original_container_tail = len(self.source) - 18
-            if secondary == original_container_tail:
-                new_secondary = self.header_size + len(new_compressed)
-                new_source[18:22] = new_secondary.to_bytes(4, "little")
-            elif secondary == len(self.decompressed_payload):
-                new_source[18:22] = len(new_decompressed_payload).to_bytes(4, "little")
-
+        new_source = bytearray(self.source[: self.payload_offset])
+        if self.chunk1_size_field_matches:
+            new_source[self.chunk1_size_field_offset : self.chunk1_size_field_offset + 4] = len(new_compressed).to_bytes(
+                4,
+                "little",
+            )
         new_source.extend(new_compressed)
+        new_source.extend(bytes(self.chunk1_budget - len(new_compressed)))
+        new_source.extend(self.source[self.payload_offset + self.chunk1_budget :])
+        if len(new_source) != len(self.source):
+            raise AppError("Rebuilt FBCHUNKS output size changed unexpectedly", 500)
         return bytes(new_source)
 
 
@@ -3664,6 +3713,8 @@ def recruit_patch_value_from_profile(profile: dict, key: str) -> object:
         return football.get("stateRank")
     if key == "position":
         return football.get("position")
+    if key == "star_rating":
+        return game.get("starRating")
     if key == "dev_trait":
         return game.get("developmentTrait")
     if key == "height_inches":
@@ -4065,7 +4116,10 @@ class SaveStore:
             info.update(
                 {
                     "header_size": container.header_size,
-                    "compressed_payload_size": container.payload_size,
+                    "payload_size": container.payload_size,
+                    "compressed_payload_size": container.chunk1_compressed_size,
+                    "chunk1_budget": container.chunk1_budget,
+                    "preserved_tail_size": len(container.source) - (container.payload_offset + container.chunk1_budget),
                     "decompressed_payload_size": len(container.decompressed_payload),
                 }
             )
@@ -4229,8 +4283,11 @@ class SaveStore:
 
         patches = build_generator_apply_patches(preview)
         changed_field_count = sum(len(patch["changes"]) for patch in patches)
-        new_payload, _ = patch_recruits_payload(container.decompressed_payload, patches, mode="generator")
-        rebuilt = container.rebuild(new_payload)
+        if changed_field_count:
+            new_payload, _ = patch_recruits_payload(container.decompressed_payload, patches, mode="generator")
+            rebuilt = container.rebuild(new_payload)
+        else:
+            rebuilt = container.source
         FBChunks.parse(rebuilt)
         backup = self.create_backup(name)
         target_path = path if write_mode == "overwrite" else self.generator_output_path(path)

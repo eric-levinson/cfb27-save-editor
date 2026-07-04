@@ -79,6 +79,8 @@ Development trait is stored as `Player.TraitDevelopment`. CFB-specific values in
 - `College_Star` -> Star
 - `College_Elite` -> Elite
 
+Manual edits can read back these enum values, but generator-wide development-trait writes are held in preview-only mode until disposable modded dynasty copies are proven to load in game.
+
 Deal breaker is stored in `Player.RecruitingDealbreaker`. In this schema it is exposed as a raw bit value, but the first 4 bits map to `RecruitingMotivationType`. Verified examples:
 
 - `0111...` -> Conference Prestige
@@ -169,7 +171,7 @@ Some display names are not stored directly. For physical traits, the player stor
 
 ## Save Format Notes
 
-The top-level save files are `FBCHUNKS` containers.
+The top-level save files are `FBCHUNKS` containers. Dynasty saves are not just one compressed blob: they contain a zlib-compressed FrTk database, zero slack, and a trailing non-database `CharacterVisuals` chunk that must stay at its original offset.
 
 The Python backend:
 
@@ -177,13 +179,17 @@ The Python backend:
 2. Decompresses the zlib payload.
 3. Passes the decompressed FrTk payload to the structured editor.
 4. Receives a rebuilt decompressed payload.
-5. Recompresses it into the original `FBCHUNKS` container.
-6. Verifies the rebuilt file can be parsed again.
-7. Creates a timestamped backup.
-8. Writes the edited save atomically.
-9. For generator apply, writes a new modded save copy by default, reloads that target, and compares intended generated writes against read-back joined profiles.
+5. Recompresses the FrTk database.
+6. Verifies the compressed database fits before the preserved tail.
+7. Rebuilds the original `FBCHUNKS` container while preserving the zero slack and `CharacterVisuals` tail byte-for-byte.
+8. Verifies the rebuilt file can be parsed again.
+9. Creates a timestamped backup.
+10. Writes the edited save atomically.
+11. For generator apply, writes a new modded save copy by default, reloads that target, and compares intended generated writes against read-back joined profiles.
 
 The Node helper intentionally does not write the outer save container. It only rebuilds the decompressed FrTk payload after `madden-franchise` updates table records. Python owns the outer container rebuild so the app avoids double-wrapping or corrupting the save.
+
+Star rating writes are available as an explicit generator option. Use `Star Write -> Request Write` for controlled game-load validation; development trait generator writes remain preview-only until their enum behavior is verified in-game.
 
 ## Project Layout
 
@@ -308,6 +314,8 @@ The app follows these rules before writing a save:
 - Validate text length and basic character constraints.
 - Validate numeric ranges for ranks, body fields, jersey number, and ratings.
 - Rebuild the save in memory first.
+- Preserve the post-database tail, including `CharacterVisuals`, byte-for-byte.
+- Refuse writes when the recompressed FrTk database would exceed the original chunk-1 budget.
 - Re-parse the rebuilt `FBCHUNKS` output before writing.
 - Create a timestamped backup before writing.
 - Write bytes through a same-directory temporary file and atomic replace.
@@ -320,6 +328,7 @@ The app follows these rules before writing a save:
 - `CharacterVisuals.RawData` is visible as a reference/blob but not decoded into safe writable fields.
 - Physical ability display-name mappings are verified for known archetypes first; unmapped archetypes show generic `Physical 1` through `Physical 5` names while still exposing rank slots.
 - Changing archetype/player type itself is still read-only because it affects position-specific ability name resolution and likely other logic.
+- Generator-wide `Player.TraitDevelopment` writes are preview-only until game-load validation proves they are safe at recruit scale.
 - The generic table browser is useful for inspection, but low-confidence inferred groups are read-only.
 - The roster file and dynasty file use different structures, so features do not automatically transfer between them.
 - Rating mappings are verified for the structured dynasty `Player` table, not the older TLV roster scanner.

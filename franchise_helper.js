@@ -40,6 +40,20 @@ const ABILITY_RANKS = ["None", "Bronze", "Silver", "Gold", "Platinum"];
 
 const DEVELOPMENT_TRAITS = ["Normal", "College_Impact", "College_Star", "College_Elite"];
 
+const PROSPECT_STAR_RATINGS = ["ONE_STAR", "TWO_STAR", "THREE_STAR", "FOUR_STAR", "FIVE_STAR"];
+
+const PROSPECT_STAR_BITS = {
+  "000": "ONE_STAR",
+  "001": "TWO_STAR",
+  "010": "THREE_STAR",
+  "011": "FOUR_STAR",
+  "100": "FIVE_STAR",
+};
+
+const PROSPECT_STAR_VALUE_BITS = Object.fromEntries(
+  Object.entries(PROSPECT_STAR_BITS).map(([bits, rating]) => [rating, bits]),
+);
+
 const MENTAL_ABILITIES = [
   "None",
   "RoadFanFavorite",
@@ -269,6 +283,24 @@ function rawWeightFromPounds(weightLbs) {
   return weightLbs - 160;
 }
 
+function decodeProspectStarRating(value) {
+  const text = String(value || "");
+  if (PROSPECT_STAR_RATINGS.includes(text)) {
+    return text;
+  }
+  return PROSPECT_STAR_BITS[text.slice(0, 3)] || "";
+}
+
+function encodeProspectStarRating(currentValue, rating) {
+  const bits = PROSPECT_STAR_VALUE_BITS[rating];
+  if (!bits) {
+    throw new Error(`Star rating must be one of: ${PROSPECT_STAR_RATINGS.join(", ")}`);
+  }
+  const current = String(currentValue || "");
+  const suffix = /^[01]{32}$/.test(current) ? current.slice(3) : "0".repeat(29);
+  return `${bits}${suffix}`;
+}
+
 function visualHintsFromHeadAsset(headAsset) {
   const match = String(headAsset || "").match(/^Generic_\d+_P_T\d+_([A-Z])_(\d+)_(\d+)$/);
   if (!match) {
@@ -380,6 +412,7 @@ async function readRecruitTables(franchise) {
     "Position",
     "JerseyNum",
     "PlayerType",
+    "ProspectStarRating",
     "TraitDevelopment",
     "RecruitingDealbreaker",
     "MentalAbility1",
@@ -470,6 +503,8 @@ function rowFromPair(pair) {
     position: playerRecord.Position || "",
     archetype: displayPlayerType(playerType),
     player_type: playerType,
+    star_rating: decodeProspectStarRating(playerRecord.ProspectStarRating),
+    star_rating_raw: playerRecord.ProspectStarRating || "",
     dev_trait: playerRecord.TraitDevelopment || "",
     dev_trait_display: displayDevelopmentTrait(playerRecord.TraitDevelopment),
     dealbreaker: dealbreaker.key,
@@ -667,7 +702,8 @@ function joinedProfileFromPair(pair) {
       ratings,
       developmentTrait: row.dev_trait,
       qualityModifier: recruitRecord.QualityModifier || "",
-      starRating: playerRecord.ProspectStarRating || "",
+      starRating: decodeProspectStarRating(playerRecord.ProspectStarRating),
+      starRatingRaw: playerRecord.ProspectStarRating || "",
       bodyType: playerRecord.CharacterBodyType || "",
       dealbreaker: row.dealbreaker,
       jerseyNumber: row.jersey_number,
@@ -970,6 +1006,7 @@ function applyPatch(pair, changes) {
     "national_rank",
     "position_rank",
     "state_rank",
+    "star_rating",
     "generic_head_asset_name",
     "dev_trait",
     "dealbreaker",
@@ -1023,6 +1060,15 @@ function applyPatch(pair, changes) {
   }
   if (Object.prototype.hasOwnProperty.call(changes, "state_rank")) {
     recruitRecord.StateRank = cleanInt(changes.state_rank, "State rank", 0, 4000);
+  }
+  if (Object.prototype.hasOwnProperty.call(changes, "star_rating")) {
+    if (!PROSPECT_STAR_RATINGS.includes(changes.star_rating)) {
+      throw new Error(`Star rating must be one of: ${PROSPECT_STAR_RATINGS.join(", ")}`);
+    }
+    playerRecord.ProspectStarRating = encodeProspectStarRating(
+      playerRecord.ProspectStarRating,
+      changes.star_rating,
+    );
   }
   if (Object.prototype.hasOwnProperty.call(changes, "generic_head_asset_name")) {
     playerRecord.GenericHeadAssetName = cleanString(
