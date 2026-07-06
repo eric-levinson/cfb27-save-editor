@@ -13,6 +13,7 @@ import tempfile
 import time
 import traceback
 import zlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,7 +21,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 
 APP_DIR = Path(__file__).resolve().parent
-SAVE_DIR = APP_DIR.parent
+SAVE_DIR_ENV = "CFB27_SAVE_DIR"
 STATIC_DIR = APP_DIR / "static"
 BACKUP_DIR = APP_DIR / "backups"
 SIDECAR_DIR = APP_DIR / "sidecars"
@@ -36,6 +37,39 @@ PLAYER_INTERNAL_KEY = bytes.fromhex("c25c33")
 PLAYER_FIRST_KEY = bytes.fromhex("c26ba1")
 PLAYER_LAST_KEY = bytes.fromhex("c2cba1")
 PLAYER_HOMETOWN_KEY = bytes.fromhex("c28d2e")
+
+
+def read_dotenv_values(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def resolve_save_dir(env: Mapping[str, str] | None = None, dotenv_path: Path | None = None) -> Path:
+    source = os.environ if env is None else env
+    override = source.get(SAVE_DIR_ENV, "").strip()
+    if not override and env is None:
+        override = read_dotenv_values(dotenv_path or (APP_DIR / ".env")).get(SAVE_DIR_ENV, "").strip()
+    if override:
+        expanded = os.path.expandvars(os.path.expanduser(override))
+        return Path(expanded).resolve()
+    return APP_DIR.parent.resolve()
+
+
+SAVE_DIR = resolve_save_dir()
 
 
 def atomic_write_bytes(path: Path, data: bytes) -> None:
