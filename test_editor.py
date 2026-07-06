@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import subprocess
 import shutil
+import sys
 import tempfile
 import threading
 import unittest
+from types import SimpleNamespace
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -30,6 +34,8 @@ from server import (
     run_franchise_helper,
     schema_entries,
     schema_occurrences,
+    read_dotenv_values,
+    resolve_save_dir,
     parse_player_records,
     patch_player_payload,
     patch_recruits_payload,
@@ -43,7 +49,91 @@ APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 
 
+def load_upstream_import_module():
+    spec = importlib.util.spec_from_file_location("upstream_import", APP_DIR / "tools" / "upstream_import.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_upstream_tuning_export_module():
+    spec = importlib.util.spec_from_file_location(
+        "upstream_tuning_export",
+        APP_DIR / "tools" / "upstream_tuning_export.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_upstream_decode_maps_module():
+    spec = importlib.util.spec_from_file_location(
+        "upstream_decode_maps",
+        APP_DIR / "tools" / "upstream_decode_maps.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_upstream_label_confidence_module():
+    spec = importlib.util.spec_from_file_location(
+        "upstream_label_confidence",
+        APP_DIR / "tools" / "upstream_label_confidence.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_recruiting_probe_module():
+    spec = importlib.util.spec_from_file_location(
+        "recruiting_probe",
+        APP_DIR / "tools" / "recruiting_probe.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_recruiting_diff_module():
+    spec = importlib.util.spec_from_file_location("recruiting_diff", APP_DIR / "tools" / "recruiting_diff.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 class EditorTests(unittest.TestCase):
+    def test_resolve_save_dir_defaults_to_app_parent(self) -> None:
+        self.assertEqual(resolve_save_dir({}), APP_DIR.parent.resolve())
+
+    def test_resolve_save_dir_uses_environment_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.assertEqual(
+                resolve_save_dir({"CFB27_SAVE_DIR": temp_dir}),
+                Path(temp_dir).resolve(),
+            )
+
+    def test_resolve_save_dir_reads_dotenv_when_env_is_unset(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dotenv = Path(temp_dir) / ".env"
+            save_dir = Path(temp_dir) / "live saves"
+            dotenv.write_text(f'CFB27_SAVE_DIR = "{save_dir}"\n', encoding="utf-8")
+            with patch.dict(os.environ, {"CFB27_SAVE_DIR": ""}):
+                self.assertEqual(resolve_save_dir(dotenv_path=dotenv), save_dir.resolve())
+
+    def test_read_dotenv_values_strips_quotes_and_spacing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dotenv = Path(temp_dir) / ".env"
+            dotenv.write_text('CFB27_SAVE_DIR = "C:\\Saves"\n# ignored\n', encoding="utf-8")
+            self.assertEqual(read_dotenv_values(dotenv), {"CFB27_SAVE_DIR": "C:\\Saves"})
+
     def test_spa_shell_exposes_generator_default_and_supporting_views(self) -> None:
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
@@ -416,6 +506,131 @@ class EditorTests(unittest.TestCase):
         self.assertIn("Recruit.QualityModifier", result["fieldAvailability"])
         self.assertIn("Player.ProspectStarRating", result["fieldAvailability"])
         self.assertIn("missingFields", result)
+
+    def test_recruiting_diff_tool_names_local_board_fixture_targets(self) -> None:
+        before = APP_DIR / ".requirements" / "ref-data" / "pre-season-0" / "DYNASTY-JUL02-07h43m00-AUTOSAVE"
+        after = APP_DIR / ".requirements" / "ref-data" / "week-0" / "DYNASTY-JUL02-07h43m00-AUTOSAVE"
+        schema = APP_DIR / "schema" / "CFB27_schema_for_madden_franchise.gz"
+        if not before.is_file() or not after.is_file() or not schema.is_file():
+            self.skipTest("Local recruiting fixture pair or generated schema is not available")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_json = Path(temp_dir) / "recruiting-diff.json"
+            output_md = Path(temp_dir) / "recruiting-diff.md"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(APP_DIR / "tools" / "recruiting_diff.py"),
+                    "--before",
+                    str(before),
+                    "--after",
+                    str(after),
+                    "--before-label",
+                    "pre-season-0",
+                    "--after-label",
+                    "week-0",
+                    "--user-team",
+                    "Oregon",
+                    "--output-json",
+                    str(output_json),
+                    "--output-md",
+                    str(output_md),
+                ],
+                cwd=APP_DIR,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            summary = json.loads(completed.stdout)
+            report = json.loads(output_json.read_text(encoding="utf-8"))
+            markdown = output_md.read_text(encoding="utf-8")
+
+        names = {target["name"] for target in report["boardTargets"]}
+        self.assertTrue({"Isaac Bynum", "Kamryn Ekanem", "Kenyon Tabor"}.issubset(names))
+        self.assertTrue(summary["readOnly"])
+        self.assertGreater(report["tableDiffs"]["UserRecruitTarget"]["changedRowCount"], 0)
+        self.assertIn("addedRowDetails", report["tableDiffs"]["UserRecruitTarget"])
+        self.assertIn("RecruitingActionFeedbackEntry[]", report["tableDiffs"])
+        self.assertIn("RecruitingActionBonus[]", report["tableDiffs"])
+        self.assertEqual(report["saveComparison"], {"sameSaveBytes": False, "samePayloadBytes": False})
+        self.assertEqual(report["fixtureContext"]["userTeam"], "Oregon")
+        self.assertEqual(report["boardCandidates"][0]["row"], 87)
+        self.assertEqual(report["boardCandidates"][0]["userRecruitTargetRows"], [0, 1, 2])
+        self.assertEqual(report["boardCandidates"][0]["derivedAfterTargetCount"], 3)
+        self.assertEqual(report["boardCandidates"][0]["derivedVisibleHours"]["afterUsed"], 725)
+        self.assertEqual(report["boardCandidates"][0]["derivedAfterScheduledVisitCount"], 0)
+        self.assertEqual(report["visitEvidence"]["scheduledTargetCountAfter"], 0)
+        by_name = {target["name"]: target for target in report["boardTargets"]}
+        self.assertEqual(by_name["Isaac Bynum"]["after"]["selectedActionHours"], 15)
+        self.assertIn("SearchSocialMedia", by_name["Isaac Bynum"]["userRecruitTargetChanges"])
+        bynum_interaction = by_name["Isaac Bynum"]["prospectInteractionChanges"][0]
+        self.assertEqual(
+            bynum_interaction["analysis"]["rawByteDiffs"],
+            [{"byte": 11, "before": 0, "after": 16, "beforeHex": "00", "afterHex": "10", "xor": 16}],
+        )
+        self.assertIn("not independent visit-scheduling evidence", bynum_interaction["analysis"]["conclusion"])
+        self.assertIn("Isaac Bynum", markdown)
+        self.assertIn("Save Comparison", markdown)
+        self.assertIn("Prospect Interaction Bit Notes", markdown)
+        self.assertIn("Scheduled Visit Evidence", markdown)
+
+    def test_recruiting_diff_tool_reports_week_three_visit_evidence(self) -> None:
+        before = APP_DIR / ".requirements" / "ref-data" / "week-3" / "DYNASTY-JUL02-07h43m00-AUTOSAVE"
+        after = APP_DIR / ".requirements" / "ref-data" / "week-3" / "bynum-after" / "DYNASTY-JUL02-07h43m00-AUTOSAVE"
+        schema = APP_DIR / "schema" / "CFB27_schema_for_madden_franchise.gz"
+        if not before.is_file() or not after.is_file() or not schema.is_file():
+            self.skipTest("Local week-3 recruiting fixture pair or generated schema is not available")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_json = Path(temp_dir) / "recruiting-diff.json"
+            output_md = Path(temp_dir) / "recruiting-diff.md"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(APP_DIR / "tools" / "recruiting_diff.py"),
+                    "--before",
+                    str(before),
+                    "--after",
+                    str(after),
+                    "--before-label",
+                    "week-3",
+                    "--after-label",
+                    "week-3-bynum-after",
+                    "--user-team",
+                    "Oregon",
+                    "--output-json",
+                    str(output_json),
+                    "--output-md",
+                    str(output_md),
+                ],
+                cwd=APP_DIR,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            summary = json.loads(completed.stdout)
+            report = json.loads(output_json.read_text(encoding="utf-8"))
+            markdown = output_md.read_text(encoding="utf-8")
+
+        self.assertEqual(report["saveComparison"], {"sameSaveBytes": True, "samePayloadBytes": True})
+        self.assertEqual(report["boardCandidates"][0]["row"], 87)
+        self.assertEqual(report["boardCandidates"][0]["derivedAfterTargetCount"], 5)
+        self.assertEqual(report["boardCandidates"][0]["derivedAfterScheduledVisitCount"], 2)
+        self.assertEqual(report["visitEvidence"]["scheduledTargetCountBefore"], 2)
+        self.assertEqual(report["visitEvidence"]["scheduledTargetCountAfter"], 2)
+        self.assertEqual(report["visitEvidence"]["unchangedScheduledTargetRows"], [3, 4])
+        self.assertEqual(summary["visitEvidence"]["unchangedScheduledTargetRows"], [3, 4])
+        by_name = {target["name"]: target for target in report["visitEvidence"]["targets"]}
+        self.assertEqual(by_name["Miles Duck"]["after"]["scheduledVisit"]["row"], 206)
+        self.assertEqual(by_name["Miles Duck"]["after"]["scheduledVisit"]["weekNumber"], 5)
+        self.assertTrue(by_name["Miles Duck"]["afterConsistency"]["consistent"])
+        self.assertEqual(by_name["Marquis Fenner"]["after"]["scheduledVisit"]["row"], 207)
+        self.assertEqual(by_name["Marquis Fenner"]["after"]["scheduledVisit"]["weekNumber"], 6)
+        self.assertTrue(by_name["Marquis Fenner"]["afterConsistency"]["consistent"])
+        self.assertIn("Miles Duck", markdown)
+        self.assertIn("Scheduled Visit Evidence", markdown)
 
     def test_joined_recruit_profiles_normalize_generator_shape(self) -> None:
         fixture = Path(__file__).resolve().parent / "schema" / "DYNASTY-decompressed-FrTk.bin"
@@ -963,29 +1178,30 @@ class EditorTests(unittest.TestCase):
         if not dynasty_files:
             self.skipTest("Local dynasty save is not available")
 
-        temp_name = f"DYNASTY-CODEX-PREVIEW-{next(tempfile._get_candidate_names())}"
-        temp_path = SAVE_DIR / temp_name
-        shutil.copy2(dynasty_files[0], temp_path)
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-        thread.start()
-        try:
-            port = httpd.server_address[1]
-            config = default_generator_configs()["configs"][0]
-            request = urllib.request.Request(
-                f"http://127.0.0.1:{port}/api/generator/preview",
-                data=json.dumps({"file": temp_name, "config": config, "seed": "endpoint-seed"}).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(request, timeout=45) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-                self.assertEqual(response.status, 200)
-        finally:
-            httpd.shutdown()
-            thread.join(timeout=5)
-            httpd.server_close()
-            temp_path.unlink(missing_ok=True)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_store = SaveStore(Path(temp_dir))
+            temp_name = f"DYNASTY-CODEX-PREVIEW-{next(tempfile._get_candidate_names())}"
+            shutil.copy2(dynasty_files[0], Path(temp_dir) / temp_name)
+            httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            with patch.object(server, "STORE", temp_store):
+                thread.start()
+                try:
+                    port = httpd.server_address[1]
+                    config = default_generator_configs()["configs"][0]
+                    request = urllib.request.Request(
+                        f"http://127.0.0.1:{port}/api/generator/preview",
+                        data=json.dumps({"file": temp_name, "config": config, "seed": "endpoint-seed"}).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(request, timeout=45) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                        self.assertEqual(response.status, 200)
+                finally:
+                    httpd.shutdown()
+                    thread.join(timeout=5)
+                    httpd.server_close()
 
         self.assertTrue(payload["valid"], payload["errors"])
         self.assertEqual(payload["file"]["name"], temp_name)
@@ -1111,6 +1327,549 @@ class EditorTests(unittest.TestCase):
         occurrences = schema_occurrences(payload, query="RecruitTarget", limit=25)
         self.assertGreaterEqual(occurrences["count"], 1)
         self.assertTrue(any(entry["name"] == "RecruitTarget" for entry in occurrences["entries"]))
+
+    def test_upstream_import_manifest_requires_source_metadata(self) -> None:
+        upstream_import = load_upstream_import_module()
+        with self.assertRaises(ValueError) as missing:
+            upstream_import.validate_manifest_sources({
+                "sources": [
+                    {
+                        "repo": "bphit4/FB-Roster-Editor",
+                        "url": "https://github.com/bphit4/FB-Roster-Editor",
+                    }
+                ]
+            })
+        self.assertIn("sources[0].commit", str(missing.exception))
+        self.assertIn("sources[0].archiveSha256", str(missing.exception))
+
+    def test_upstream_import_normalizes_extra_color_csv_columns(self) -> None:
+        upstream_import = load_upstream_import_module()
+        rows = upstream_import.json_safe_csv_rows([
+            {"Team": "NC State", "Color 1": "#CC0000", None: ["#FFFFFF"]}
+        ])
+        self.assertEqual(rows, [{"Team": "NC State", "Color 1": "#CC0000", "_extra": ["#FFFFFF"]}])
+
+    def test_upstream_import_generates_zip_based_research_artifacts(self) -> None:
+        fb_zip = APP_DIR / ".requirements" / "upstream-cache" / "FB-Roster-Editor-main.zip"
+        manager_zip = APP_DIR / ".requirements" / "upstream-cache" / "My-CFB-Dynasty-Manager-main.zip"
+        if not fb_zip.is_file() or not manager_zip.is_file():
+            self.skipTest("Local upstream repository ZIPs are not available")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(APP_DIR / "tools" / "upstream_import.py"),
+                    "--fb-roster-zip",
+                    str(fb_zip),
+                    "--dynasty-manager-zip",
+                    str(manager_zip),
+                    "--output-dir",
+                    temp_dir,
+                    "--tuning-export-dir",
+                    str(Path(temp_dir) / "missing-exports"),
+                    "--generated-at",
+                    "2026-07-05T00:00:00Z",
+                ],
+                cwd=APP_DIR,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            stdout = json.loads(completed.stdout)
+            manifest = json.loads((Path(temp_dir) / "upstream-import-manifest.json").read_text(encoding="utf-8"))
+            tuning = json.loads((Path(temp_dir) / "upstream-cfb27-tuning-summary.json").read_text(encoding="utf-8"))
+            schema = json.loads((Path(temp_dir) / "upstream-cfb27-schema-snapshot.json").read_text(encoding="utf-8"))
+            team = json.loads((Path(temp_dir) / "upstream-team-workflow-summary.json").read_text(encoding="utf-8"))
+
+        self.assertIn("manifest", stdout)
+        self.assertEqual(manifest["kind"], "cfb27.upstreamImportManifest.v1")
+        self.assertEqual(manifest["sources"][0]["commit"], "9e91540e9ff72a6aa953a21ec86a122f8278e82d")
+        self.assertEqual(manifest["sources"][1]["commit"], "a98f7b40cef3392b3cdfc49dd2040f47221a49b8")
+        self.assertFalse(manifest["safety"]["writeRecipesEnabled"])
+        self.assertGreaterEqual(tuning["relevantTableCount"], 90)
+        self.assertIn("action", tuning["groups"])
+        self.assertGreaterEqual(len(tuning["missingTableExports"]), 1)
+        self.assertTrue(any(item["name"] == "UserRecruitTarget" for item in schema["schemas"]))
+        self.assertGreaterEqual(team["fbsTeamRows"], 100)
+        self.assertGreaterEqual(team["logoAssetCount"], 100)
+
+    def test_upstream_tuning_export_resolves_nested_fb_roster_root(self) -> None:
+        upstream_export = load_upstream_tuning_export_module()
+        root = APP_DIR / ".requirements" / "upstream-cache" / "FB-Roster-Editor"
+        if not root.is_dir():
+            self.skipTest("Local extracted FB-Roster-Editor directory is not available")
+        resolved = upstream_export.resolve_fb_roster_root(root)
+        self.assertEqual(resolved.name, "FB-Roster-Editor-main")
+        self.assertTrue((resolved / "backend" / "tools" / "madden_franchise_bridge.mjs").is_file())
+
+    def test_upstream_tuning_export_generates_recruiting_tables_and_csvs(self) -> None:
+        root = APP_DIR / ".requirements" / "upstream-cache" / "FB-Roster-Editor"
+        if not root.is_dir():
+            self.skipTest("Local extracted FB-Roster-Editor directory is not available")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            aggregate_path = Path(temp_dir) / "upstream-cfb27-recruiting-tuning-tables.json"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(APP_DIR / "tools" / "upstream_tuning_export.py"),
+                    "--fb-roster-dir",
+                    str(root),
+                    "--output-dir",
+                    temp_dir,
+                    "--aggregate-output",
+                    str(aggregate_path),
+                ],
+                cwd=APP_DIR,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            manifest = json.loads(completed.stdout)
+            aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["failedExportCount"], 0)
+        self.assertGreaterEqual(manifest["exportedTableCount"], 90)
+        self.assertEqual(manifest["exportedTableCount"], manifest["csvTableCount"])
+        action_type = next(
+            table for table in aggregate["tables"]
+            if table["actualName"] == "RecruitingActionTypeEnumTableEntry"
+        )
+        labels = {record["LongName"] for record in action_type["records"]}
+        self.assertIn("Contact Friends and Family", labels)
+        self.assertIn("DM the Player", labels)
+
+    def test_upstream_decode_maps_match_known_weekly_action_costs(self) -> None:
+        source = APP_DIR / ".requirements" / "research" / "upstream-cfb27-recruiting-tuning-tables.json"
+        if not source.is_file():
+            self.skipTest("Local upstream recruiting tuning table artifact is not available")
+        upstream_decode = load_upstream_decode_maps_module()
+        maps = upstream_decode.build_decode_maps(source)
+        weekly = maps["weeklyActionFields"]
+        self.assertEqual(weekly["SearchSocialMedia"]["upstream"]["cost"], 5)
+        self.assertEqual(weekly["SearchSocialMedia"]["upstream"]["action"]["shortName"], "Social Media")
+        self.assertEqual(weekly["ContactHighSchoolCoaches"]["upstream"]["cost"], 10)
+        self.assertEqual(weekly["ContactHighSchoolCoaches"]["upstream"]["action"]["shortName"], "DM Player")
+        self.assertEqual(weekly["ContactFriendsAndFamily"]["upstream"]["cost"], 25)
+        self.assertEqual(weekly["SendTheHouse"]["upstream"]["cost"], 50)
+        self.assertEqual(weekly["SendTheHouse"]["status"], "experimental-opened-user-request")
+        active_visit = maps["derived"]["activeVisitInfoActivityLowNibble"]
+        self.assertEqual(active_visit["13"]["shortName"], "Tailgate")
+
+    def test_recruiting_diff_enrichment_adds_upstream_action_labels(self) -> None:
+        source = APP_DIR / ".requirements" / "research" / "upstream-cfb27-recruiting-tuning-tables.json"
+        if not source.is_file():
+            self.skipTest("Local upstream recruiting tuning table artifact is not available")
+        upstream_decode = load_upstream_decode_maps_module()
+        recruiting_diff = load_recruiting_diff_module()
+        decode_maps = upstream_decode.build_decode_maps(source)
+        report = {
+            "before": {
+                "label": "before",
+                "saveSha256": "A",
+                "payloadSha256": "B",
+                "payloadBytes": 1,
+                "tailBytes": 0,
+            },
+            "after": {
+                "label": "after",
+                "saveSha256": "C",
+                "payloadSha256": "D",
+                "payloadBytes": 1,
+                "tailBytes": 0,
+            },
+            "boardTargets": [
+                {
+                    "before": {"actionBooleans": {"SearchSocialMedia": False}},
+                    "after": {
+                        "actionBooleans": {
+                            "SearchSocialMedia": True,
+                            "ContactHighSchoolCoaches": True,
+                            "ContactFriendsAndFamily": False,
+                        },
+                        "scheduledVisit": {
+                            "activity": "00000000000000000000111000101101",
+                            "weekType": 1,
+                            "weekNumber": 13,
+                        },
+                        "prospectVisitState": {
+                            "visitActivityType": "01110001011010000000000000000000",
+                            "visitWeekType": "00010110100000000000000000000000",
+                        },
+                        "activePitches": [
+                            {
+                                "field": "ActiveRecruitingPitch0",
+                                "row": 1347,
+                                "pitch": 0,
+                                "intensity": "00000000000000000000000000000000",
+                            }
+                        ],
+                        "recruitingProfile": {
+                            "dealbreakerRaw": "10011011101010100101001010011100",
+                            "idealPitchRaw": "01000011001010001000000000000000",
+                            "motivation1Raw": "0000",
+                            "motivation2Raw": "0000",
+                            "motivation3Raw": "0000",
+                        },
+                    },
+                }
+            ],
+            "tableDiffs": {
+                "RecruitingActionFeedbackEntry": {
+                    "name": "RecruitingActionFeedbackEntry",
+                    "addedRowDetails": [
+                        {
+                            "row": 1,
+                            "fields": {
+                                "BonusList": "00101101101010100000000000001111",
+                                "HoursSpent": 0,
+                                "MinInfluenceGain": 0,
+                                "IntelUnlocked": 0,
+                                "RecruitingActionType": 1,
+                                "InfluenceGained": 0,
+                                "MaxInfluenceGain": 0,
+                            },
+                            "references": {
+                                "BonusList": {
+                                    "tableId": 5845,
+                                    "table": "RecruitingActionBonus[]",
+                                    "row": 15,
+                                }
+                            },
+                        },
+                        {"row": 2, "fields": {"RecruitingActionType": 4}},
+                    ],
+                    "removedRowDetails": [],
+                    "changedRows": [],
+                },
+                "RecruitingActionBonus": {
+                    "name": "RecruitingActionBonus",
+                    "addedRowDetails": [
+                        {
+                            "row": 10,
+                            "fields": {
+                                "BonusType": "00000000000000000000000101100100",
+                                "BonusValueType": 1,
+                                "BonusValue": 100,
+                            },
+                            "references": {
+                                "BonusType": {"tableId": 0, "table": None, "row": 356}
+                            },
+                        }
+                    ],
+                    "removedRowDetails": [],
+                    "changedRows": [],
+                },
+                "RecruitingActionBonus[]": {
+                    "name": "RecruitingActionBonus[]",
+                    "addedRowDetails": [
+                        {
+                            "row": 15,
+                            "fields": {
+                                "RecruitingActionBonus0": "00100001001001000000000000001010"
+                            },
+                            "references": {
+                                "RecruitingActionBonus0": {
+                                    "tableId": 4242,
+                                    "table": "RecruitingActionBonus",
+                                    "row": 10,
+                                }
+                            },
+                        }
+                    ],
+                    "removedRowDetails": [],
+                    "changedRows": [],
+                }
+            },
+        }
+        recruiting_diff.enrich_report_with_decodes(report, decode_maps)
+        details = report["boardTargets"][0]["after"]["selectedActionDetails"]
+        labels = [item["upstream"]["action"]["shortName"] for item in details]
+        self.assertEqual(labels, ["Social Media", "DM Player"])
+        profile_decodes = report["boardTargets"][0]["after"]["recruitingProfile"]["decoded"]
+        self.assertEqual(profile_decodes["dealbreaker"]["shortName"], "Playing Time")
+        self.assertEqual(profile_decodes["dealbreaker"]["decodeMethod"], "player-recruiting-dealbreaker-high-nibble")
+        self.assertEqual(profile_decodes["idealPitch"]["shortName"], "The Clutch")
+        self.assertEqual(profile_decodes["idealPitch"]["decodeMethod"], "player-ideal-recruiting-pitch-high-five-bits")
+        active_pitch = recruiting_diff.decode_field_value(decode_maps, "ActiveRecruitingPitch", "Pitch", 11)
+        self.assertEqual(active_pitch["shortName"], "Aspirational Goals")
+        decoded = report["tableDiffs"]["RecruitingActionFeedbackEntry"]["addedRowDetails"]
+        self.assertEqual(decoded[0]["decodedFields"]["RecruitingActionType"]["shortName"], "Scouting")
+        self.assertEqual(decoded[1]["decodedFields"]["RecruitingActionType"]["shortName"], "Schedule Visit")
+        visit = report["boardTargets"][0]["after"]["scheduledVisit"]
+        self.assertEqual(visit["activityDecoded"]["shortName"], "Tailgate")
+        self.assertEqual(visit["activityDecoded"]["decodeMethod"], "active-visit-activity-low-nibble")
+        prospect = report["boardTargets"][0]["after"]["prospectVisitState"]
+        self.assertEqual(
+            prospect["visitActivityTypeDecode"]["status"],
+            "unresolved-reference-window",
+        )
+        self.assertEqual(prospect["visitActivityTypeDecode"]["reference"]["row"], 0)
+        evidence = report["recruitingActionEvidence"]
+        self.assertEqual(evidence["feedbackEntries"][0]["action"], "Scouting")
+        self.assertEqual(evidence["feedbackEntries"][0]["linkedBonuses"][0]["valueType"], "Percentage")
+        self.assertEqual(evidence["feedbackEntries"][0]["linkedBonuses"][0]["value"], 100)
+        markdown = recruiting_diff.markdown_report(report)
+        self.assertIn("Recruiting Action Evidence", markdown)
+        self.assertIn("Scouting", markdown)
+        self.assertIn("Percentage 100", markdown)
+        self.assertIn("UserRecruitTarget Active Pitch State", markdown)
+        self.assertIn("1347:0/00000000000000000000000000000000", markdown)
+        self.assertFalse(report["upstreamDecodes"]["writeRecipesEnabled"])
+
+    def test_upstream_label_confidence_tracks_validated_and_blocked_families(self) -> None:
+        decode_maps = APP_DIR / ".requirements" / "research" / "upstream-cfb27-recruiting-decode-maps.json"
+        manual_report = APP_DIR / ".requirements" / "research" / "manual-send-house-scout-visit-diff.json"
+        if not decode_maps.is_file() or not manual_report.is_file():
+            self.skipTest("Local upstream decode maps or manual recruiting report is not available")
+        confidence_tool = load_upstream_label_confidence_module()
+        confidence = confidence_tool.build_confidence(decode_maps, [manual_report])
+        families = confidence["families"]
+        manual = json.loads(manual_report.read_text(encoding="utf-8"))
+
+        self.assertEqual(families["weeklyActions"]["confidence"], "validated-015-read-label")
+        weekly_fields = {item["field"] for item in families["weeklyActions"]["evidence"]}
+        self.assertIn("SendTheHouse", weekly_fields)
+        self.assertFalse(families["weeklyActions"]["blocked"])
+        self.assertEqual(
+            families["activeVisitActivity"]["confidence"],
+            "medium-read-only-fixture-label",
+        )
+        self.assertTrue(
+            any(item["label"] == "Tailgate" for item in families["activeVisitActivity"]["evidence"])
+        )
+        self.assertEqual(
+            families["feedbackActionType"]["confidence"],
+            "matched-manual-fixture-read-label",
+        )
+        self.assertEqual(families["pitchType"]["confidence"], "matched-fixture-read-label")
+        self.assertTrue(
+            any(item["field"] == "Player.IdealRecruitingPitch" for item in families["pitchType"]["evidence"])
+        )
+        self.assertEqual(families["motivation"]["confidence"], "matched-fixture-read-label")
+        self.assertTrue(
+            any(item["field"] == "Player.RecruitingDealbreaker" for item in families["motivation"]["evidence"])
+        )
+        self.assertEqual(families["scoutingGrade"]["confidence"], "upstream-only-no-fixture-evidence")
+        self.assertTrue(
+            any(item["action"] == "Scouting" for item in families["feedbackActionType"]["evidence"])
+        )
+        self.assertTrue(
+            any(item["valueType"] == "Percentage" for item in families["bonusValueType"]["evidence"])
+        )
+        blocker_families = {item["family"] for item in families["unresolvedReferenceWindows"]["evidence"]}
+        self.assertIn("RecruitingActionFeedbackEntry.RecruitingActionIntensity", blocker_families)
+        self.assertIn("RecruitingActionBonus.BonusType", blocker_families)
+        self.assertFalse(confidence["safety"]["validatedWriteRecipesEnabled"])
+        self.assertTrue(confidence["safety"]["experimentalProbeWritesEnabled"])
+        active_pitch_evidence = [
+            item
+            for target in manual.get("boardTargets", [])
+            for item in ((target.get("after") or {}).get("sameRecruitTargetActivePitches") or [])
+        ]
+        self.assertGreaterEqual(len(active_pitch_evidence), 1)
+        self.assertTrue(all(item["ownershipStatus"] == "ambiguous-read-only" for item in active_pitch_evidence))
+        self.assertTrue(any(item.get("referencingBoardRows") for item in active_pitch_evidence))
+
+    def test_recruiting_probe_builds_experimental_action_and_field_patches(self) -> None:
+        recruiting_probe = load_recruiting_probe_module()
+        args = SimpleNamespace(
+            patch_json=None,
+            board_row=87,
+            no_board_hours=False,
+            user_target_row=9,
+            action="SendTheHouse",
+            disable=False,
+            sway_pitch="Aspirational",
+            scholarship_status=None,
+            commit=True,
+            committed_week=7,
+            active_pitch_row=42,
+            active_pitch_index=0,
+            pitch="Aspirational",
+            pitch_intensity="Sway",
+        )
+        patch = recruiting_probe.load_probe_patch(args)
+        self.assertEqual(
+            patch["patches"],
+            [{"userRecruitTargetRow": 9, "actionField": "SendTheHouse", "enabled": True}],
+        )
+        self.assertEqual(patch["boardRow"], 87)
+        self.assertTrue(patch["adjustBoardHours"])
+        self.assertEqual(
+            patch["fieldPatches"],
+            [
+                {
+                    "table": "UserRecruitTarget",
+                    "row": 9,
+                    "field": "SwayPitch",
+                    "value": "Aspirational",
+                    "experimental": True,
+                },
+                {
+                    "table": "UserRecruitTarget",
+                    "row": 9,
+                    "field": "ScholarshipStatus",
+                    "value": "Committed",
+                    "experimental": True,
+                },
+                {
+                    "table": "UserRecruitTarget",
+                    "row": 9,
+                    "field": "CommittedWeekNumber",
+                    "value": 7,
+                    "experimental": True,
+                },
+                {
+                    "table": "ActiveRecruitingPitch",
+                    "row": 42,
+                    "field": "Pitch",
+                    "value": "Aspirational",
+                    "experimental": True,
+                },
+                {
+                    "table": "ActiveRecruitingPitch",
+                    "row": 42,
+                    "field": "Intensity",
+                    "value": "Sway",
+                    "experimental": True,
+                },
+            ],
+        )
+
+    def test_recruiting_probe_can_build_active_pitch_discovery_patch(self) -> None:
+        recruiting_probe = load_recruiting_probe_module()
+        args = SimpleNamespace(
+            patch_json=None,
+            board_row=87,
+            no_board_hours=True,
+            user_target_row=9,
+            action=None,
+            disable=False,
+            sway_pitch=None,
+            scholarship_status=None,
+            commit=False,
+            committed_week=None,
+            active_pitch_row=None,
+            active_pitch_index=1,
+            pitch="Aspirational",
+            pitch_intensity="Sway",
+        )
+        patch = recruiting_probe.load_probe_patch(args)
+        self.assertEqual(patch["patches"], [])
+        self.assertFalse(patch["adjustBoardHours"])
+        self.assertEqual(
+            patch["fieldPatches"],
+            [
+                {
+                    "table": "ActiveRecruitingPitch",
+                    "field": "Pitch",
+                    "value": "Aspirational",
+                    "experimental": True,
+                    "userRecruitTargetRow": 9,
+                    "activePitchIndex": 1,
+                },
+                {
+                    "table": "ActiveRecruitingPitch",
+                    "field": "Intensity",
+                    "value": "Sway",
+                    "experimental": True,
+                    "userRecruitTargetRow": 9,
+                    "activePitchIndex": 1,
+                },
+            ],
+        )
+
+    def test_recruiting_probe_encodes_active_pitch_labels_into_packed_value(self) -> None:
+        source = APP_DIR / ".requirements" / "research" / "active-current.frk"
+        if not source.is_file():
+            self.skipTest("Local active-current payload fixture is not available")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            patch_path = temp / "active-pitch-labels.json"
+            output_path = temp / "active-pitch-labels.frk"
+            patch_path.write_text(json.dumps({
+                "adjustBoardHours": False,
+                "fieldPatches": [
+                    {
+                        "table": "ActiveRecruitingPitch",
+                        "row": 1,
+                        "field": "Pitch",
+                        "value": "Aspirational",
+                    },
+                    {
+                        "table": "ActiveRecruitingPitch",
+                        "row": 1,
+                        "field": "Intensity",
+                        "value": "Sway",
+                    },
+                ],
+            }), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    "node",
+                    str(APP_DIR / "franchise_helper.js"),
+                    "recruiting-probe-action",
+                    str(source),
+                    str(patch_path),
+                    str(output_path),
+                ],
+                cwd=APP_DIR,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        report = json.loads(completed.stdout)
+        self.assertEqual(report["changes"][0]["field"], "Pitch")
+        self.assertEqual(report["changes"][0]["before"], 8)
+        self.assertEqual(report["changes"][0]["after"], 11)
+        self.assertEqual(report["changes"][0]["packedAfter"], "00000000000000000000000000001011")
+        self.assertEqual(report["changes"][1]["field"], "Intensity")
+        self.assertEqual(report["changes"][1]["before"], 0)
+        self.assertEqual(report["changes"][1]["after"], 2)
+        self.assertEqual(report["changes"][1]["packedAfter"], "00000000000000000000000001001011")
+
+    def test_recruiting_probe_rejects_empty_active_pitch_list_slots(self) -> None:
+        source = APP_DIR / ".requirements" / "research" / "active-current.frk"
+        if not source.is_file():
+            self.skipTest("Local active-current payload fixture is not available")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            patch_path = temp / "active-pitch-empty-slot.json"
+            output_path = temp / "active-pitch-empty-slot.frk"
+            patch_path.write_text(json.dumps({
+                "adjustBoardHours": False,
+                "fieldPatches": [
+                    {
+                        "table": "ActiveRecruitingPitch",
+                        "userRecruitTargetRow": 9,
+                        "activePitchIndex": 0,
+                        "field": "Pitch",
+                        "value": "Aspirational",
+                    },
+                ],
+            }), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    "node",
+                    str(APP_DIR / "franchise_helper.js"),
+                    "recruiting-probe-action",
+                    str(source),
+                    str(patch_path),
+                    str(output_path),
+                ],
+                cwd=APP_DIR,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("has no ActivePitches references", completed.stderr)
+        self.assertFalse(output_path.exists())
 
     def test_can_patch_dynasty_player_string_on_copy(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
