@@ -50,10 +50,13 @@ a published release.
 
 ## Documentation
 
+- [Lua API](docs/lua-api.md)
+- [Safety boundary](docs/safety.md)
+- [Runtime verification](docs/research/runtime-verification.md)
+- [Legacy hook findings](docs/research/legacy-hook-findings.md)
+- [Archive policy](archive/README.md)
 - [Repository redesign](docs/superpowers/specs/2026-07-11-cfb27-lua-hook-repository-design.md)
 - [Implementation plan](docs/superpowers/plans/2026-07-11-cfb27-lua-hook-repository.md)
-- Supported getting-started, Lua API, protocol, CLI, and safety guides are added
-  as their corresponding implementation slices land.
 
 ## Development
 
