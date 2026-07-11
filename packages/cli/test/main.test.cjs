@@ -113,6 +113,35 @@ test('doctor dispatch performs no installation writes', async () => {
   assert.equal(installs, 0);
 });
 
+test('logs and events dispatch through cursor-aware SDK methods', async () => {
+  const calls = [];
+  const sdk = {
+    discoverGame: async () => ({ pid: 12, path: 'F:\\CollegeFB27.exe' }),
+    createClient: () => ({
+      getLogs: async (options) => { calls.push(['logs', options]); return { logs: [] }; },
+      getEvents: async (options) => { calls.push(['events', options]); return { events: [], nextCursor: 7 }; },
+    }),
+  };
+  assert.equal(await main(['logs'], { sdk, io: memoryIo().io }), 0);
+  assert.equal(await main(['events', '--after', '7'], { sdk, io: memoryIo().io }), 0);
+  assert.deepEqual(calls, [['logs', { limit: 100 }], ['events', { after: 7, limit: 256 }]]);
+});
+
+test('logs --follow emits JSONL log events without a summary object', async () => {
+  const { io, output } = memoryIo();
+  const sdk = {
+    discoverGame: async () => ({ pid: 12, path: 'F:\\CollegeFB27.exe' }),
+    createClient: () => ({}),
+    followEvents: async function* () {
+      yield { cursor: 1, type: 'log', payload: { message: 'ready' } };
+      yield { cursor: 2, type: 'tick', payload: {} };
+    },
+  };
+  assert.equal(await main(['logs', '--follow', '--json'], { sdk, io }), 0);
+  assert.equal(output.stdout.trim().split('\n').length, 1);
+  assert.equal(JSON.parse(output.stdout).event.payload.message, 'ready');
+});
+
 test('--json errors emit exactly one object to stdout', async () => {
   const { io, output } = memoryIo();
   const error = Object.assign(new Error('host missing'), { code: 'HOST_NOT_READY' });

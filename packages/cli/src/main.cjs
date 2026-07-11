@@ -13,12 +13,16 @@ Commands:
   run <file>   Run a Lua script file
   eval <lua>   Evaluate Lua source
   doctor       Run read-only diagnostics
+  logs          Read recent host logs
+  events        Read host events after a cursor
 
 Options:
   --game-dir <path>       College Football 27 directory
   --mmc-dir <path>        Madden Modding Community manager directory
   --artifacts-dir <path>  Built hook DLL directory
   --json                  Emit one JSON object
+  --follow                Follow new log events as JSONL with --json
+  --after <cursor>        Start event reads after this cursor
   -h, --help              Show this help`;
 
 const defaultIo = {
@@ -88,6 +92,30 @@ async function main(argv, { sdk = require('@cfb27/lua-hook'), io = defaultIo } =
       const gameDir = requireDirectory(options.gameDir || env.CFB27_GAME_DIR, '--game-dir');
       const mmcDir = requireDirectory(options.mmcDir || env.CFB27_MMC_DIR, '--mmc-dir');
       result = await sdk.doctor({ gameDir, mmcDir });
+    } else if (command === 'logs') {
+      if (positionals.length) throw usageError('logs does not accept positional arguments');
+      const game = await sdk.discoverGame();
+      const client = sdk.createClient({ pid: game.pid });
+      if (options.follow) {
+        for await (const event of sdk.followEvents(client, {
+          after: options.after || 0,
+          signal: io.signal,
+        })) {
+          if (event.type !== 'log') continue;
+          if (json) io.out(JSON.stringify({ ok: true, command: 'logs', event }));
+          else io.out(event.payload?.message || '');
+        }
+        return 0;
+      }
+      result = await client.getLogs({ limit: 100 });
+    } else if (command === 'events') {
+      if (positionals.length) throw usageError('events does not accept positional arguments');
+      if (options.follow) throw usageError('--follow is only supported by logs');
+      const game = await sdk.discoverGame();
+      result = await sdk.createClient({ pid: game.pid }).getEvents({
+        after: options.after || 0,
+        limit: 256,
+      });
     } else {
       throw usageError(`Unknown command: ${command}`);
     }

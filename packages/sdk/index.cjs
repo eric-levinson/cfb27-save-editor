@@ -5,6 +5,7 @@ const { discoverGame } = require('./src/process.cjs');
 const { createClient, getHostStatus, runScriptFile } = require('./src/client.cjs');
 const { inspectInstallation, installHook, restoreMmcHook } = require('./src/install.cjs');
 const { doctor } = require('./src/doctor.cjs');
+const { followEvents } = require('./src/logs.cjs');
 
 module.exports = {
   ERROR_CODES,
@@ -17,4 +18,5 @@ module.exports = {
   installHook,
   restoreMmcHook,
   doctor,
+  followEvents,
 };

@@ -106,6 +106,12 @@ function createClient({ pid, pipeName, timeoutMs = 3000 } = {}) {
     evaluateLua(source) {
       return request('evaluate', { source });
     },
+    getLogs({ limit = 100 } = {}) {
+      return request('logs', { limit });
+    },
+    getEvents({ after = 0, limit = 100 } = {}) {
+      return request('events', { after, limit });
+    },
   });
 }
 

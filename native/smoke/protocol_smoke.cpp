@@ -122,6 +122,23 @@ int wmain(int argc, wchar_t** argv) {
   if (!Request(pipe, {{"protocol", 1}, {"id", "run-1"}, {"command", "runScript"},
                       {"params", {{"name", "smoke.lua"}, {"source", source}}}}, response, false)) return 8;
   if (!response.value("ok", false) || response["result"].value("status", "") != "ok") return 9;
+
+  const std::string event_source = "cfb.log(\"event-proof\")";
+  if (!Request(pipe, {{"protocol", 1}, {"id", "event-seed"}, {"command", "evaluate"},
+                      {"params", {{"source", event_source}}}}, response, false)) return 16;
+  if (!response.value("ok", false)) return 17;
+  if (!Request(pipe, {{"protocol", 1}, {"id", "logs-1"}, {"command", "logs"},
+                      {"params", {{"limit", 64}}}}, response, false)) return 18;
+  if (!response.value("ok", false) || !response["result"].contains("logs")) return 19;
+  if (!Request(pipe, {{"protocol", 1}, {"id", "events-1"}, {"command", "events"},
+                      {"params", {{"after", 0}, {"limit", 256}}}}, response, false)) return 20;
+  if (!response.value("ok", false) || !response["result"].contains("events")) return 21;
+  int proof_count = 0;
+  for (const auto& event : response["result"]["events"]) {
+    if (event.value("type", "") == "log" &&
+        event.value("payload", Json::object()).value("message", "") == "event-proof") ++proof_count;
+  }
+  if (proof_count != 1) return 22;
   std::cout << "protocol smoke passed\n";
   return 0;
 }
