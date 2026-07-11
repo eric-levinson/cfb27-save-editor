@@ -33,9 +33,10 @@ Earlier request-detour and save-editor findings are retained separately in
 ## Read-only discovery preview verified on July 11, 2026
 
 - The manually tested process was PID `21900`; `CollegeFB27.exe` matched the
-  supported SHA-256 above. The installed forwarding proxy hash began
-  `4638D7E5` and ended `F756`; the manually tested host hash began `1420F4BC`
-  and ended `D3CE`.
+  supported SHA-256 above. The installed forwarding proxy SHA-256 was
+  `4638D7E54A6715538119254069B075C94EB7AB41A6914907AAD96750ABD0F756`;
+  the manually tested host SHA-256 was
+  `1420F4BCAA089153E671FD41D7B89F3162EFF8AAD94B4D1EFD18039E6590D3CE`.
 - The live hello response advertised `memoryScan`, `memoryRead`, and
   `telemetry` capabilities. No memory write was attempted during this gate.
 - An initial automatic scan failed between pages with `ENOENT`. Retrying with
