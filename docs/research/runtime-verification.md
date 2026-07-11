@@ -29,3 +29,30 @@ a smoke executable with the same one-MiB stack reserve.
 
 Earlier request-detour and save-editor findings are retained separately in
 `legacy-hook-findings.md` and the repository archive.
+
+## Read-only discovery preview verified on July 11, 2026
+
+- The manually tested process was PID `21900`; `CollegeFB27.exe` matched the
+  supported SHA-256 above. The installed forwarding proxy hash began
+  `4638D7E5` and ended `F756`; the manually tested host hash began `1420F4BC`
+  and ended `D3CE`.
+- The live hello response advertised `memoryScan`, `memoryRead`, and
+  `telemetry` capabilities. No memory write was attempted during this gate.
+- An initial automatic scan failed between pages with `ENOENT`. Retrying with
+  the corrected SDK-only continuation handling completed the scan; this was a
+  client retry correction, not a host reinstall.
+- The complete scan covered `10,670,854,144` eligible bytes in `69,379` ms and
+  returned three candidates. Batch re-read confirmed the exact 16-byte
+  sentinel at `0x25DDC14D0` and `0x34CC50048`; the transient candidate at
+  `0x273FEB930` had changed and was correctly rejected.
+- Registered telemetry sequence `2` appeared exactly once while the event
+  cursor advanced from `718` to `720`.
+- After entering Recruiting and returning to the Dynasty hub, a 639-second
+  responsiveness watch retained PID `21900`. Tick count advanced from `8632`
+  to `14986`, the event cursor advanced from `871` to `1506`, and no error was
+  observed.
+
+The version-only native rebuild performed after this manual gate necessarily
+changes the final host binary hash. That final packaged hash was verified by
+the automated release gate below, but was not the binary exercised by this
+manual live session.
