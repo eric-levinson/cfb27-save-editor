@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import server
+import live_process
 from live_process import (
     LIVE_PLAYER_DUPLICATE_OFFSETS,
     LIVE_PLAYER_ID_OFFSET,
@@ -175,6 +176,34 @@ class EditorTests(unittest.TestCase):
         overall_primary, overall_duplicate = live_rating_write_addresses(0x10000000, "overall")
         self.assertEqual(overall_primary, 0x1000010C)
         self.assertEqual(overall_duplicate, 0x1000010F)
+
+    def test_live_rating_write_plan_accepts_verified_mixed_generations(self) -> None:
+        objects = [
+            {"address": 0x1000, "playerId": 25130, "ratings": {"speed": 86}, "duplicateRatingBytesValid": True},
+            {"address": 0x2000, "playerId": 25130, "ratings": {"speed": 87}, "duplicateRatingBytesValid": True},
+            {"address": 0x3000, "playerId": 25130, "ratings": {"speed": 82}, "duplicateRatingBytesValid": True},
+        ]
+
+        self.assertTrue(hasattr(live_process, "plan_live_rating_object_writes"))
+        plan = live_process.plan_live_rating_object_writes(objects, 25130, "speed", 90)
+
+        self.assertEqual([item["before"] for item in plan], [86, 87, 82])
+        self.assertEqual([item["after"] for item in plan], [90, 90, 90])
+        self.assertEqual([item["address"] for item in plan], [0x1000, 0x2000, 0x3000])
+
+    def test_live_rating_write_plan_rejects_identity_or_integrity_mismatch(self) -> None:
+        self.assertTrue(hasattr(live_process, "plan_live_rating_object_writes"))
+        wrong_player = [
+            {"address": 0x1000, "playerId": 99999, "ratings": {"speed": 86}, "duplicateRatingBytesValid": True},
+        ]
+        corrupt_duplicate = [
+            {"address": 0x1000, "playerId": 25130, "ratings": {"speed": 86}, "duplicateRatingBytesValid": False},
+        ]
+
+        with self.assertRaisesRegex(RuntimeError, "Player ID changed"):
+            live_process.plan_live_rating_object_writes(wrong_player, 25130, "speed", 90)
+        with self.assertRaisesRegex(RuntimeError, "duplicate integrity failed"):
+            live_process.plan_live_rating_object_writes(corrupt_duplicate, 25130, "speed", 90)
 
     def test_live_player_layout_decodes_verified_rating_pairs(self) -> None:
         data = bytearray(LIVE_PLAYER_OBJECT_SIZE)
