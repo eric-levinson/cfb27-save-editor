@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <limits>
+#include <memory>
 #include <system_error>
 #include <utility>
 
@@ -82,6 +84,21 @@ bool OverlapsMatchContext(std::uintptr_t candidate, std::size_t candidate_length
   return false;
 }
 
+bool ProductionRead(const void* source, void* destination, std::size_t length,
+                    std::size_t& copied) {
+  SIZE_T process_copied = 0;
+  const bool ok = ReadProcessMemory(GetCurrentProcess(), source, destination, length,
+                                    &process_copied) != FALSE;
+  copied = static_cast<std::size_t>(process_copied);
+  return ok;
+}
+
+struct VirtualFreeDeleter {
+  void operator()(std::uint8_t* allocation) const {
+    if (allocation != nullptr) VirtualFree(allocation, 0, MEM_RELEASE);
+  }
+};
+
 }  // namespace
 
 std::optional<std::uintptr_t> ParseAddress(std::string_view text) {
@@ -102,6 +119,10 @@ std::string FormatAddress(std::uintptr_t address) {
   if (error != std::errc{}) return {};
   std::string formatted("0x");
   formatted.append(digits, end);
+  std::transform(formatted.begin() + 2, formatted.end(), formatted.begin() + 2,
+                 [](unsigned char character) {
+                   return static_cast<char>(std::toupper(character));
+                 });
   return formatted;
 }
 
@@ -156,7 +177,7 @@ BatchReadResult ReadMemoryBatch(const std::vector<ReadRange>& ranges) {
   return result;
 }
 
-ScanResult ScanPrivateMemory(const ScanRequest& request) {
+ScanResult ScanPrivateMemory(const ScanRequest& request, ScanReadFunction read) {
   ScanResult result;
   if (request.pattern.size() < kMinPatternBytes ||
       request.pattern.size() > kMaxPatternBytes ||
@@ -170,85 +191,129 @@ ScanResult ScanPrivateMemory(const ScanRequest& request) {
 
   SYSTEM_INFO system_info{};
   GetSystemInfo(&system_info);
-  auto cursor = reinterpret_cast<std::uintptr_t>(system_info.lpMinimumApplicationAddress);
+  const auto minimum =
+      reinterpret_cast<std::uintptr_t>(system_info.lpMinimumApplicationAddress);
   const auto maximum = reinterpret_cast<std::uintptr_t>(system_info.lpMaximumApplicationAddress);
-  const auto page_size = static_cast<std::uintptr_t>(system_info.dwPageSize);
-  std::vector<std::uint8_t> region_bytes;
-  region_bytes.reserve(kMaxRegionBytes);
+  auto cursor = minimum;
+  if (request.cursor) {
+    const auto parsed = ParseAddress(*request.cursor);
+    if (!parsed || *parsed < minimum || *parsed > maximum) {
+      result.code = kInvalidRequest;
+      return result;
+    }
+    cursor = *parsed;
+  }
+
+  const auto buffer_capacity = kScanChunkBytes + request.pattern.size() - 1;
+  std::unique_ptr<std::uint8_t, VirtualFreeDeleter> scan_buffer(
+      static_cast<std::uint8_t*>(VirtualAlloc(nullptr, buffer_capacity,
+                                               MEM_RESERVE | MEM_COMMIT,
+                                               PAGE_READWRITE)));
+  if (!scan_buffer) {
+    result.code = kMemoryAccessDenied;
+    return result;
+  }
+  const auto buffer_begin = reinterpret_cast<std::uintptr_t>(scan_buffer.get());
+  const auto buffer_end = buffer_begin + buffer_capacity;
+  const auto read_chunk = read != nullptr ? read : ProductionRead;
   result.matches.reserve(request.max_matches + 1);
 
   while (cursor <= maximum) {
     MEMORY_BASIC_INFORMATION info{};
     if (VirtualQuery(reinterpret_cast<const void*>(cursor), &info, sizeof(info)) != sizeof(info)) {
-      if (maximum - cursor < page_size) break;
-      cursor += page_size;
-      continue;
+      result.code = kMemoryAccessDenied;
+      return result;
     }
 
     const auto region_base = reinterpret_cast<std::uintptr_t>(info.BaseAddress);
-    std::uintptr_t next = maximum;
-    bool last_region = true;
-    if (!AddOverflows(region_base, info.RegionSize)) {
-      next = region_base + info.RegionSize;
-      last_region = next <= cursor || next > maximum;
+    if (AddOverflows(region_base, info.RegionSize)) {
+      result.code = kInvalidRequest;
+      return result;
+    }
+    const auto region_end = region_base + info.RegionSize;
+    if (region_end <= cursor) {
+      result.code = kInvalidRequest;
+      return result;
     }
 
-    if (IsEligiblePrivateReadableRegion(info)) {
-      const auto scan_size = std::min(info.RegionSize, kMaxRegionBytes);
-      if (scan_size > kMaxScanBytes - result.scanned_bytes) {
-        result.code = "SCAN_LIMIT_EXCEEDED";
+    const bool is_scan_buffer =
+        cursor < buffer_end && buffer_begin < region_end;
+    if (!IsEligiblePrivateReadableRegion(info) || is_scan_buffer) {
+      if (region_end > maximum) {
+        result.complete = true;
         return result;
       }
+      cursor = region_end;
+      continue;
+    }
 
-      region_bytes.resize(scan_size);
-      SIZE_T copied = 0;
-      if (ReadProcessMemory(GetCurrentProcess(), info.BaseAddress, region_bytes.data(), scan_size,
-                            &copied) &&
-          copied == scan_size) {
-        result.scanned_bytes += scan_size;
-        if (scan_size >= request.pattern.size()) {
-          const auto last_offset = scan_size - request.pattern.size();
-          for (std::size_t offset = 0; offset <= last_offset; ++offset) {
-            const auto match_address = region_base + offset;
-            if (OverlapsRange(match_address, request.pattern.size(), request.pattern.data(),
-                              request.pattern.size()) ||
-                OverlapsRange(match_address, request.pattern.size(), request.mask.data(),
-                              request.mask.size()) ||
-                OverlapsRange(match_address, request.pattern.size(), region_bytes.data(),
-                              region_bytes.capacity()) ||
-                OverlapsMatchContext(match_address, request.pattern.size(), result) ||
-                !PatternMatches(region_bytes.data() + offset, request)) {
-              continue;
-            }
+    const auto remaining_budget = kMaxScanPageBytes - result.scanned_bytes;
+    if (remaining_budget == 0) {
+      result.next_cursor = FormatAddress(cursor);
+      return result;
+    }
+    const auto unique_bytes = std::min({
+        region_end - cursor,
+        static_cast<std::uintptr_t>(kScanChunkBytes),
+        static_cast<std::uintptr_t>(remaining_budget),
+    });
+    const auto after_unique = cursor + unique_bytes;
+    const auto lookahead = std::min<std::uintptr_t>(
+        request.pattern.size() - 1, region_end - after_unique);
+    const auto read_bytes = static_cast<std::size_t>(unique_bytes + lookahead);
+    std::size_t copied = 0;
+    if (!read_chunk(reinterpret_cast<const void*>(cursor), scan_buffer.get(), read_bytes,
+                    copied) || copied != read_bytes) {
+      result.code = kMemoryAccessDenied;
+      return result;
+    }
 
-            const auto context_start = offset > request.context_before
-                                           ? offset - request.context_before
-                                           : std::size_t{0};
-            const auto after_start = offset + request.pattern.size();
-            const auto context_end = request.context_after > scan_size - after_start
-                                         ? scan_size
-                                         : after_start + request.context_after;
-            ScanMatch match;
-            match.address = FormatAddress(match_address);
-            match.region_base = FormatAddress(region_base);
-            match.region_size = info.RegionSize;
-            match.protection = info.Protect;
-            match.context_address = FormatAddress(region_base + context_start);
-            match.context.assign(region_bytes.begin() + context_start,
-                                 region_bytes.begin() + context_end);
-            result.matches.push_back(std::move(match));
+    if (read_bytes >= request.pattern.size()) {
+      const auto last_offset = read_bytes - request.pattern.size();
+      for (std::size_t offset = 0; offset <= last_offset; ++offset) {
+        const auto match_address = cursor + offset;
+        if (match_address >= after_unique) break;
+        if (OverlapsRange(match_address, request.pattern.size(), request.pattern.data(),
+                          request.pattern.size()) ||
+            OverlapsRange(match_address, request.pattern.size(), request.mask.data(),
+                          request.mask.size()) ||
+            OverlapsMatchContext(match_address, request.pattern.size(), result) ||
+            !PatternMatches(scan_buffer.get() + offset, request)) {
+          continue;
+        }
 
-            if (result.matches.size() > request.max_matches) {
-              result.code = "TOO_MANY_MATCHES";
-              return result;
-            }
-          }
+        const auto context_start = offset > request.context_before
+                                       ? offset - request.context_before
+                                       : std::size_t{0};
+        const auto after_start = offset + request.pattern.size();
+        const auto context_end = request.context_after > read_bytes - after_start
+                                     ? read_bytes
+                                     : after_start + request.context_after;
+        ScanMatch match;
+        match.address = FormatAddress(match_address);
+        match.region_base = FormatAddress(region_base);
+        match.region_size = info.RegionSize;
+        match.protection = info.Protect;
+        match.context_address = FormatAddress(cursor + context_start);
+        match.context.assign(scan_buffer.get() + context_start,
+                             scan_buffer.get() + context_end);
+        result.matches.push_back(std::move(match));
+
+        if (result.matches.size() > request.max_matches) {
+          result.code = "TOO_MANY_MATCHES";
+          return result;
         }
       }
     }
 
-    if (last_region) break;
-    cursor = next;
+    result.scanned_bytes += static_cast<std::size_t>(unique_bytes);
+    cursor = after_unique;
+    if (result.scanned_bytes == kMaxScanPageBytes) {
+      result.next_cursor = FormatAddress(cursor);
+      return result;
+    }
+
+    if (cursor == region_end && region_end > maximum) break;
   }
 
   result.complete = true;

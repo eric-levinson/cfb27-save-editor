@@ -4,7 +4,9 @@
 
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -14,6 +16,25 @@ namespace {
 using cfb27::memory::FormatAddress;
 using cfb27::memory::ReadMemoryBatch;
 using cfb27::memory::ScanPrivateMemory;
+
+std::uintptr_t g_fail_read_at{};
+std::uintptr_t g_scan_destination{};
+bool g_attempted_scan_buffer_read{};
+
+bool TestRead(const void* source, void* destination, std::size_t length,
+              std::size_t& copied) {
+  copied = 0;
+  const auto begin = reinterpret_cast<std::uintptr_t>(source);
+  if (g_scan_destination == 0) {
+    g_scan_destination = reinterpret_cast<std::uintptr_t>(destination);
+  } else if (g_scan_destination >= begin && g_scan_destination - begin < length) {
+    g_attempted_scan_buffer_read = true;
+  }
+  if (g_fail_read_at >= begin && g_fail_read_at - begin < length) return false;
+  std::memcpy(destination, source, length);
+  copied = length;
+  return true;
+}
 
 void Require(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
@@ -126,13 +147,114 @@ void TestScanExcludesMaskBuffer() {
   const auto mask_begin = reinterpret_cast<std::uintptr_t>(request.mask.data());
   const auto mask_end = mask_begin + request.mask.size();
 
-  const auto scan = ScanPrivateMemory(request);
+  g_scan_destination = 0;
+  g_attempted_scan_buffer_read = false;
+  const auto scan = ScanPrivateMemory(request, TestRead);
   Require(scan.complete, "mask buffer exclusion scan completes");
+  Require(!g_attempted_scan_buffer_read, "dedicated scan buffer excluded from traversal");
   for (const auto& match : scan.matches) {
     const auto address = cfb27::memory::ParseAddress(match.address);
     Require(address && (*address < mask_begin || *address >= mask_end),
             "scan returned request mask buffer");
   }
+}
+
+std::size_t CountAddress(const std::vector<cfb27::memory::ScanMatch>& matches,
+                         const void* address) {
+  const auto expected = reinterpret_cast<std::uintptr_t>(address);
+  return static_cast<std::size_t>(std::count_if(
+      matches.begin(), matches.end(), [expected](const auto& match) {
+        return cfb27::memory::ParseAddress(match.address) == expected;
+      }));
+}
+
+void TestPagedLargeRegionAndBoundaries() {
+  constexpr std::size_t kLargeBytes = 80ull * 1024 * 1024;
+  Allocation large(kLargeBytes);
+  auto* bytes = static_cast<std::uint8_t*>(large.get());
+  const auto sentinel = HexBytes("92F4C76B19A35DE804286ACE13579BDF");
+  const std::vector<std::uint8_t> mask(sentinel.size(), 0xFF);
+  const auto chunk_boundary = cfb27::memory::kScanChunkBytes - 4;
+  const auto page_boundary = cfb27::memory::kMaxScanPageBytes - 4;
+  const auto old_tail = (64ull * 1024 * 1024) + 128;
+  std::memcpy(bytes + chunk_boundary, sentinel.data(), sentinel.size());
+  std::memcpy(bytes + page_boundary, sentinel.data(), sentinel.size());
+  std::memcpy(bytes + old_tail, sentinel.data(), sentinel.size());
+
+  cfb27::memory::ScanRequest request{
+      .pattern = sentinel,
+      .mask = mask,
+      .max_matches = 8,
+      .context_before = 4,
+      .context_after = 4,
+      .cursor = FormatAddress(reinterpret_cast<std::uintptr_t>(bytes)),
+  };
+  std::vector<cfb27::memory::ScanMatch> matches;
+  std::optional<std::string> previous;
+  bool completed = false;
+  for (std::size_t pages = 0; pages < 4096; ++pages) {
+    const auto result = ScanPrivateMemory(request);
+    Require(result.code.empty(), "large-region page succeeds");
+    Require(result.scanned_bytes <= cfb27::memory::kMaxScanPageBytes,
+            "scan page is bounded");
+    matches.insert(matches.end(), result.matches.begin(), result.matches.end());
+    if (result.complete) {
+      Require(!result.next_cursor.has_value(), "complete page has no cursor");
+      completed = true;
+      break;
+    }
+    Require(result.next_cursor.has_value(), "partial page has cursor");
+    Require(result.next_cursor != previous, "cursor advances");
+    if (previous) {
+      Require(cfb27::memory::ParseAddress(*result.next_cursor) >
+                  cfb27::memory::ParseAddress(*previous),
+              "cursor is monotonic");
+    }
+    previous = result.next_cursor;
+    request.cursor = result.next_cursor;
+  }
+  Require(completed, "paged scan terminates");
+  Require(CountAddress(matches, bytes + chunk_boundary) == 1,
+          "chunk-boundary match found once");
+  Require(CountAddress(matches, bytes + page_boundary) == 1,
+          "page-boundary match found once");
+  Require(CountAddress(matches, bytes + old_tail) == 1,
+          "large-region tail found once");
+
+  request.cursor = FormatAddress(reinterpret_cast<std::uintptr_t>(bytes));
+  g_scan_destination = 0;
+  g_attempted_scan_buffer_read = false;
+  g_fail_read_at = reinterpret_cast<std::uintptr_t>(bytes);
+  const auto failed = ScanPrivateMemory(request, TestRead);
+  Require(failed.code == "MEMORY_ACCESS_DENIED", "eligible read failure is explicit");
+  Require(!failed.complete, "failed read is never complete");
+  Require(!failed.next_cursor.has_value(), "failed read cannot advance cursor");
+  g_fail_read_at = 0;
+}
+
+void TestInvalidPageCursors() {
+  SYSTEM_INFO system_info{};
+  GetSystemInfo(&system_info);
+  const auto maximum =
+      reinterpret_cast<std::uintptr_t>(system_info.lpMaximumApplicationAddress);
+  const auto above_maximum = FormatAddress(maximum + 1);
+  const auto result = ScanPrivateMemory({
+      .pattern = HexBytes("A1B2C3D4E5F60718"),
+      .mask = std::vector<std::uint8_t>(8, 0xFF),
+      .max_matches = 1,
+      .cursor = above_maximum,
+  });
+  Require(!result.complete && result.code == "INVALID_REQUEST",
+          "cursor above system maximum rejected");
+
+  const auto overflowing = ScanPrivateMemory({
+      .pattern = HexBytes("A1B2C3D4E5F60718"),
+      .mask = std::vector<std::uint8_t>(8, 0xFF),
+      .max_matches = 1,
+      .cursor = "0x10000000000000000",
+  });
+  Require(!overflowing.complete && overflowing.code == "INVALID_REQUEST",
+          "overflowing cursor rejected");
 }
 
 void TestDeniedReads() {
@@ -168,7 +290,7 @@ void TestDeniedReads() {
   Require(!overflowing.ok && overflowing.ranges.empty(), "overflowing batch address rejection");
 }
 
-void TestAggregateScanLimit() {
+void TestPagedScanBeyondOldAggregateLimit() {
   constexpr std::size_t kRegionSize = 64ull * 1024 * 1024;
   std::vector<void*> regions;
   regions.reserve(9);
@@ -177,15 +299,38 @@ void TestAggregateScanLimit() {
     Require(region != nullptr, "allocate aggregate scan region");
     regions.push_back(region);
   }
+  std::sort(regions.begin(), regions.end(), [](const void* left, const void* right) {
+    return reinterpret_cast<std::uintptr_t>(left) <
+           reinterpret_cast<std::uintptr_t>(right);
+  });
 
-  const auto result = ScanPrivateMemory({
-      .pattern = HexBytes("D13C579B2468ACE00123456789ABCDEF"),
+  auto sentinel = HexBytes("D13C579B2468ACE00123456789ABCDEF");
+  std::memcpy(static_cast<std::uint8_t*>(regions.back()) + 1024, sentinel.data(),
+              sentinel.size());
+  cfb27::memory::ScanRequest request{
+      .pattern = sentinel,
       .mask = std::vector<std::uint8_t>(16, 0xFF),
       .max_matches = 1,
-  });
-  Require(!result.complete && result.code == "SCAN_LIMIT_EXCEEDED" &&
-              result.scanned_bytes <= cfb27::memory::kMaxScanBytes,
-          "aggregate scan limit");
+      .cursor = FormatAddress(reinterpret_cast<std::uintptr_t>(regions.front())),
+  };
+  SecureZeroMemory(sentinel.data(), sentinel.size());
+  sentinel.clear();
+  sentinel.shrink_to_fit();
+  bool found = false;
+  for (std::size_t page = 0; page < 4096; ++page) {
+    const auto result = ScanPrivateMemory(request);
+    Require(result.code.empty(), "aggregate continuation succeeds");
+    Require(result.scanned_bytes <= cfb27::memory::kMaxScanPageBytes,
+            "aggregate continuation page bounded");
+    if (CountAddress(result.matches, static_cast<std::uint8_t*>(regions.back()) + 1024) == 1) {
+      found = true;
+      break;
+    }
+    if (result.complete) break;
+    Require(result.next_cursor.has_value(), "aggregate continuation cursor");
+    request.cursor = result.next_cursor;
+  }
+  Require(found, "target after 512 MiB is reachable");
 
   for (void* region : regions) VirtualFree(region, 0, MEM_RELEASE);
 }
@@ -198,8 +343,10 @@ int main() {
     TestRegionEligibility();
     TestScanAndRead();
     TestScanExcludesMaskBuffer();
+    TestPagedLargeRegionAndBoundaries();
+    TestInvalidPageCursors();
     TestDeniedReads();
-    TestAggregateScanLimit();
+    TestPagedScanBeyondOldAggregateLimit();
     std::cout << "memory reader smoke passed\n";
     return 0;
   } catch (const std::exception& error) {
