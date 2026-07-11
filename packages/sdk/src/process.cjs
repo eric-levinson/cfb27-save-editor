@@ -10,6 +10,10 @@ const { Cfb27HookError } = require('./errors.cjs');
 const PROCESS_QUERY = "$ErrorActionPreference = 'Stop'; " +
   "@(Get-CimInstance Win32_Process -Filter \"Name = 'CollegeFB27.exe'\" | " +
   'Select-Object ProcessId, ExecutablePath) | ConvertTo-Json -Compress';
+const POWERSHELL = path.join(
+  process.env.SystemRoot || 'C:\\Windows',
+  'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
+);
 
 function parseProcessJson(output) {
   const text = String(output || '').trim();
@@ -35,7 +39,7 @@ function parseProcessJson(output) {
 function runProcessQuery(execFileImpl) {
   return new Promise((resolve, reject) => {
     execFileImpl(
-      'powershell.exe',
+      POWERSHELL,
       ['-NoProfile', '-NonInteractive', '-Command', PROCESS_QUERY],
       { windowsHide: true, encoding: 'utf8' },
       (error, stdout, stderr) => {

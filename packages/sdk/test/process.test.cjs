@@ -36,7 +36,8 @@ test('discovery runs a constant non-interactive process query', async (t) => {
   await fs.writeFile(executable, 'test executable');
 
   const execFileImpl = (file, args, options, callback) => {
-    assert.equal(file, 'powershell.exe');
+    assert.equal(path.isAbsolute(file), true);
+    assert.equal(path.basename(file).toLowerCase(), 'powershell.exe');
     assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-Command']);
     assert.equal(options.windowsHide, true);
     assert.match(args[3], /\| Select-Object/);

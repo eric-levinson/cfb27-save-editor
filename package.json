@@ -12,8 +12,8 @@
     "packages/cli"
   ],
   "scripts": {
-    "check": "node --check packages/sdk/index.cjs && node --check packages/cli/bin/cfb27lua.cjs && node --check packages/cli/src/main.cjs && node --check scripts/package-release.cjs",
-    "test": "node --test tests/*.test.cjs packages/*/test/*.test.cjs",
+    "check": "node --check packages/sdk/index.cjs && node --check packages/cli/bin/cfb27lua.cjs && node --check packages/cli/src/main.cjs && node --check scripts/package-release.cjs && node --check scripts/run-tests.cjs",
+    "test": "node scripts/run-tests.cjs",
     "pack:preview": "node scripts/package-release.cjs"
   }
 }
