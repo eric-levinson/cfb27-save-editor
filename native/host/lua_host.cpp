@@ -2,10 +2,14 @@
 #include <tlhelp32.h>
 #include <bcrypt.h>
 
+#include "protocol.h"
+
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -26,6 +30,8 @@ extern "C" {
 namespace {
 
 constexpr wchar_t kPipePrefix[] = L"\\\\.\\pipe\\CFB27LuaHost.";
+constexpr wchar_t kV1PipePrefix[] = L"\\\\.\\pipe\\CFB27LuaHost.v1.";
+constexpr char kHostVersion[] = "0.1.0-dev.1";
 constexpr std::uintmax_t kSupportedExecutableSize = 247845776;
 constexpr char kSupportedExecutableSha256[] = "9E654AD49C4702D8F9FA4E38FD1110ABE657DD38926D4124B30C70E7D29ADFE8";
 constexpr DWORD kTickMilliseconds = 100;
@@ -35,17 +41,47 @@ struct Callback {
   int reference{};
 };
 
+struct HostEvent {
+  std::uint64_t cursor{};
+  std::int64_t timestamp_ms{};
+  std::string type;
+  cfb27::protocol::Json payload;
+};
+
+struct LogEntry {
+  std::int64_t timestamp_ms{};
+  std::string message;
+};
+
 std::atomic<bool> g_running{true};
 std::atomic<bool> g_ready{false};
 std::atomic<bool> g_supported_build{false};
 std::atomic<std::uint64_t> g_scripts_run{0};
 std::atomic<std::uint64_t> g_ticks{0};
 std::mutex g_lua_mutex;
+std::mutex g_event_mutex;
+std::mutex g_file_log_mutex;
 lua_State* g_lua{};
 std::vector<Callback> g_callbacks;
 std::filesystem::path g_host_directory;
 std::filesystem::path g_log_path;
 std::string g_last_error;
+std::deque<HostEvent> g_events;
+std::deque<LogEntry> g_logs;
+std::uint64_t g_next_event_cursor{1};
+std::atomic<std::int64_t> g_last_tick_event_ms{0};
+
+std::int64_t NowMilliseconds() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+void AppendEvent(std::string type, cfb27::protocol::Json payload,
+                 std::int64_t timestamp_ms = NowMilliseconds()) {
+  std::lock_guard lock(g_event_mutex);
+  g_events.push_back({g_next_event_cursor++, timestamp_ms, std::move(type), std::move(payload)});
+  while (g_events.size() > 1024) g_events.pop_front();
+}
 
 std::string JsonEscape(std::string_view value) {
   std::ostringstream out;
@@ -69,8 +105,19 @@ std::string JsonEscape(std::string_view value) {
 }
 
 void Log(std::string_view message) {
-  std::ofstream stream(g_log_path, std::ios::app);
-  if (stream) stream << message << '\n';
+  const auto timestamp_ms = NowMilliseconds();
+  {
+    std::lock_guard lock(g_file_log_mutex);
+    std::ofstream stream(g_log_path, std::ios::app);
+    if (stream) stream << message << '\n';
+  }
+  {
+    std::lock_guard lock(g_event_mutex);
+    g_logs.push_back({timestamp_ms, std::string(message)});
+    while (g_logs.size() > 512) g_logs.pop_front();
+    g_events.push_back({g_next_event_cursor++, timestamp_ms, "log", {{"message", message}}});
+    while (g_events.size() > 1024) g_events.pop_front();
+  }
 }
 
 bool EndsWithInsensitive(std::wstring value, const wchar_t* suffix) {
@@ -319,6 +366,8 @@ bool RunLuaText(std::string_view text, const char* chunk_name, std::string& resu
     return false;
   }
   result = "ok";
+  g_last_error.clear();
+  lua_settop(g_lua, 0);
   ++g_scripts_run;
   return true;
 }
@@ -346,6 +395,160 @@ std::string StatusJson() {
       << ",\"ticks\":" << g_ticks.load()
       << ",\"lastError\":\"" << JsonEscape(g_last_error) << "\"}";
   return out.str();
+}
+
+cfb27::protocol::Json SuccessResponse(
+    const std::string& id, cfb27::protocol::Json result) {
+  return {
+      {"protocol", cfb27::protocol::kVersion},
+      {"id", id},
+      {"ok", true},
+      {"result", std::move(result)},
+  };
+}
+
+std::optional<std::size_t> ReadLimit(
+    const cfb27::protocol::Json& params, std::size_t default_value) {
+  if (!params.contains("limit")) return default_value;
+  if (params["limit"].is_number_unsigned()) {
+    const auto value = params["limit"].get<std::uint64_t>();
+    if (value < 1 || value > 256) return std::nullopt;
+    return static_cast<std::size_t>(value);
+  }
+  if (params["limit"].is_number_integer()) {
+    const auto value = params["limit"].get<std::int64_t>();
+    if (value < 1 || value > 256) return std::nullopt;
+    return static_cast<std::size_t>(value);
+  }
+  return std::nullopt;
+}
+
+cfb27::protocol::Json LogsResult(std::size_t limit) {
+  cfb27::protocol::Json logs = cfb27::protocol::Json::array();
+  std::lock_guard lock(g_event_mutex);
+  const std::size_t begin = g_logs.size() > limit ? g_logs.size() - limit : 0;
+  for (std::size_t index = begin; index < g_logs.size(); ++index) {
+    logs.push_back({
+        {"timestampMs", g_logs[index].timestamp_ms},
+        {"message", g_logs[index].message},
+    });
+  }
+  return {{"logs", std::move(logs)}};
+}
+
+cfb27::protocol::Json EventsResult(std::uint64_t after, std::size_t limit) {
+  cfb27::protocol::Json events = cfb27::protocol::Json::array();
+  std::uint64_t next_cursor = after;
+  std::lock_guard lock(g_event_mutex);
+  for (const auto& event : g_events) {
+    if (event.cursor <= after) continue;
+    events.push_back({
+        {"cursor", event.cursor},
+        {"type", event.type},
+        {"timestampMs", event.timestamp_ms},
+        {"payload", event.payload},
+    });
+    next_cursor = event.cursor;
+    if (events.size() >= limit) break;
+  }
+  return {{"events", std::move(events)}, {"nextCursor", next_cursor}};
+}
+
+cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
+  using cfb27::protocol::ErrorResponse;
+  using Json = cfb27::protocol::Json;
+
+  const std::string id = request.is_object() && request.contains("id") &&
+      request["id"].is_string() ? request["id"].get<std::string>() : "";
+  if (!request.is_object() || !request.contains("protocol") ||
+      !request["protocol"].is_number_integer() ||
+      request["protocol"].get<int>() != static_cast<int>(cfb27::protocol::kVersion) ||
+      !request.contains("id") || !request["id"].is_string() ||
+      !request.contains("command") || !request["command"].is_string()) {
+    return ErrorResponse(id, "INVALID_REQUEST",
+                         "Request is missing protocol, id, or command");
+  }
+
+  const std::string command = request["command"].get<std::string>();
+  const Json params = request.contains("params") ? request["params"] : Json::object();
+  if (!params.is_object()) {
+    return ErrorResponse(id, "INVALID_REQUEST", "Request params must be an object");
+  }
+
+  const bool supported = SupportedBuild();
+  const bool writes_allowed = supported && !RealAnticheatIsRunning();
+  if (command == "hello") {
+    return SuccessResponse(id, {
+        {"protocolVersion", cfb27::protocol::kVersion},
+        {"hostVersion", kHostVersion},
+        {"supportedBuild", supported},
+        {"writesAllowed", writes_allowed},
+        {"capabilities", {"status", "runScript", "evaluate", "logs", "events"}},
+    });
+  }
+
+  if (command == "status") {
+    std::string last_error;
+    {
+      std::lock_guard lock(g_lua_mutex);
+      last_error = g_last_error;
+    }
+    return SuccessResponse(id, {
+        {"ready", g_ready.load(std::memory_order_acquire)},
+        {"supportedBuild", supported},
+        {"writesAllowed", writes_allowed},
+        {"scriptsRun", g_scripts_run.load(std::memory_order_acquire)},
+        {"ticks", g_ticks.load(std::memory_order_acquire)},
+        {"lastError", std::move(last_error)},
+    });
+  }
+
+  if (command == "logs") {
+    const auto limit = ReadLimit(params, 100);
+    if (!limit) return ErrorResponse(id, "INVALID_REQUEST", "limit must be an integer from 1 to 256");
+    return SuccessResponse(id, LogsResult(*limit));
+  }
+
+  if (command == "events") {
+    const auto limit = ReadLimit(params, 100);
+    if (!limit) return ErrorResponse(id, "INVALID_REQUEST", "limit must be an integer from 1 to 256");
+    std::uint64_t after = 0;
+    if (params.contains("after")) {
+      if (!params["after"].is_number_unsigned() &&
+          !(params["after"].is_number_integer() && params["after"].get<std::int64_t>() >= 0)) {
+        return ErrorResponse(id, "INVALID_REQUEST", "after must be a nonnegative integer");
+      }
+      after = params["after"].get<std::uint64_t>();
+    }
+    return SuccessResponse(id, EventsResult(after, *limit));
+  }
+
+  std::string source;
+  std::string chunk_name;
+  if (command == "runScript") {
+    if (!params.contains("name") || !params["name"].is_string() ||
+        !params.contains("source") || !params["source"].is_string()) {
+      return ErrorResponse(id, "INVALID_REQUEST",
+                           "runScript requires string name and source params");
+    }
+    chunk_name = params["name"].get<std::string>();
+    source = params["source"].get<std::string>();
+  } else if (command == "evaluate") {
+    if (!params.contains("source") || !params["source"].is_string()) {
+      return ErrorResponse(id, "INVALID_REQUEST",
+                           "evaluate requires a string source param");
+    }
+    chunk_name = "evaluate";
+    source = params["source"].get<std::string>();
+  } else {
+    return ErrorResponse(id, "INVALID_REQUEST", "Unknown command", {{"command", command}});
+  }
+
+  std::string result;
+  if (!RunLuaText(source, chunk_name.c_str(), result)) {
+    return ErrorResponse(id, "SCRIPT_ERROR", result);
+  }
+  return SuccessResponse(id, {{"status", "ok"}});
 }
 
 std::string HandleCommand(std::string command) {
@@ -399,6 +602,12 @@ void TickLoop() {
     Sleep(kTickMilliseconds);
     ++g_ticks;
     FireEvent("tick");
+    const auto now = NowMilliseconds();
+    auto previous = g_last_tick_event_ms.load(std::memory_order_relaxed);
+    if (now - previous >= 1000 &&
+        g_last_tick_event_ms.compare_exchange_strong(previous, now, std::memory_order_relaxed)) {
+      AppendEvent("tick", {{"ticks", g_ticks.load(std::memory_order_relaxed)}}, now);
+    }
   }
 }
 
@@ -416,7 +625,13 @@ DWORD WINAPI Start(void* module_value) {
   RunAutorun();
   g_ready.store(true);
   FireEvent("game_ready");
+  AppendEvent("game_ready", {{"ready", true}});
   std::thread(PipeServer).detach();
+  const std::wstring v1_pipe_name =
+      std::wstring(kV1PipePrefix) + std::to_wstring(GetCurrentProcessId());
+  std::thread([v1_pipe_name] {
+    cfb27::protocol::Serve(v1_pipe_name, g_running, HandleV1Request);
+  }).detach();
   std::thread(TickLoop).detach();
   Log("CFB27 Lua host ready");
   return 0;

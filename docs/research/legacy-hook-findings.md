@@ -1,6 +1,11 @@
-# CFB27 live-hook research
+# Legacy hook findings
 
-Status: active reverse-engineering notes for the July 10, 2026 CFB27 PC build. A live rating change is **not yet proven end to end**. This document separates confirmed behavior from hypotheses.
+Status: verified historical research from the July 10, 2026 CFB27 PC build,
+preserved to explain the route to the supported startup-loaded Lua host. The
+remote injection and request-detour implementations described here are now
+unsupported. Statements about work still being blocked reflect that historical
+checkpoint; current host verification is documented in
+`runtime-verification.md`.
 
 ## Supported build and safety boundary
 
