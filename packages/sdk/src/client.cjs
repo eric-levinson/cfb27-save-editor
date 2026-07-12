@@ -57,6 +57,257 @@ const HOST_WRITE_TRANSACTION_ERROR_CODES = new Set([
   'ROLLBACK_VERIFICATION_FAILED',
   'SESSION_WRITES_DISABLED',
 ]);
+const FRTK_CAPABILITIES = Object.freeze({
+  profile: 'frtkProfileV1',
+  catalog: 'frtkCatalogV1',
+  read: 'frtkRecordReadV1',
+  transaction: 'frtkFieldTransactionV1',
+});
+const FRTK_ERROR_MESSAGES = Object.freeze({
+  FRTK_PROFILE_INVALID: 'FrTk profile is invalid',
+  FRTK_DISCOVERY_FAILED: 'Required FrTk tables were not resolved',
+  FRTK_CATALOG_STALE: 'FrTk catalog generation is stale',
+  FRTK_FIELD_INVALID: 'FrTk field or value is invalid',
+  FRTK_AUTHORITY_UNPROVEN: 'FrTk write authority is unproven',
+  MEMORY_ACCESS_DENIED: 'FrTk memory access was denied',
+  UNSUPPORTED_BUILD: 'FrTk profile does not match the supported build',
+  TRANSACTION_APPLY_FAILED: 'FrTk transaction failed and was rolled back',
+  ROLLBACK_VERIFICATION_FAILED: 'FrTk transaction rollback could not be verified',
+  SESSION_WRITES_DISABLED: 'Writes are disabled for this host session',
+  INVALID_REQUEST: 'Host rejected the FrTk request',
+  INVALID_RESPONSE: 'Host returned an invalid FrTk response',
+  HOST_NOT_READY: 'Could not connect to the Lua host',
+  PIPE_TIMEOUT: 'Lua host FrTk request timed out',
+  PROTOCOL_MISMATCH: 'Host protocol version does not match',
+});
+const FRTK_AUTHORITY = new Set(['discovery_only', 'commit_adapter_required', 'direct_verified']);
+const FRTK_REASONS = new Set(['caller_transition', 'save_changed', 'shutdown']);
+const FRTK_TRANSACTION_ID = /^[A-Za-z0-9._-]{1,64}$/;
+
+function cloneJsonValue(value, depth = 0) {
+  if (depth > 32) throw invalidRequest('FrTk profile nesting is too deep');
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map((item) => cloneJsonValue(item, depth + 1));
+  if (!isObject(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw invalidRequest('FrTk profile must contain only JSON values');
+  }
+  const clone = {};
+  for (const [key, item] of Object.entries(value)) {
+    Object.defineProperty(clone, key, {
+      value: cloneJsonValue(item, depth + 1), enumerable: true, writable: true, configurable: true,
+    });
+  }
+  return clone;
+}
+
+function cloneFrtkBundle(bundle) {
+  if (!hasExactKeys(bundle, ['profile', 'layout']) || !isObject(bundle.profile) ||
+      !isObject(bundle.layout)) throw invalidRequest('loadFrtkProfile requires profile and layout');
+  const clone = cloneJsonValue(bundle);
+  if (JSON.stringify(clone).length > 1024 * 1024) {
+    throw invalidRequest('FrTk profile exceeds the supported size');
+  }
+  return clone;
+}
+
+function cloneGenerationOptions(options) {
+  if (!hasExactKeys(options, ['generation']) ||
+      !isSafeIntegerBetween(options.generation, 1, Number.MAX_SAFE_INTEGER)) {
+    throw invalidRequest('FrTk catalog generation is invalid');
+  }
+  return { generation: options.generation };
+}
+
+function cloneFieldNames(fields) {
+  if (!Array.isArray(fields) || fields.length < 1 || fields.length > 64) {
+    throw invalidRequest('FrTk field list must contain 1 to 64 names');
+  }
+  const seen = new Set();
+  return fields.map((field) => {
+    if (typeof field !== 'string' || field.length < 1 || field.length > 128 || seen.has(field)) {
+      throw invalidRequest('FrTk field names must be unique bounded strings');
+    }
+    seen.add(field);
+    return field;
+  });
+}
+
+function cloneRecordOptions(options) {
+  if (!hasExactKeys(options, ['generation', 'records']) ||
+      !isSafeIntegerBetween(options.generation, 1, Number.MAX_SAFE_INTEGER) ||
+      !Array.isArray(options.records) || options.records.length < 1 || options.records.length > 64) {
+    throw invalidRequest('readFrtkRecords options are invalid');
+  }
+  return {
+    generation: options.generation,
+    records: options.records.map((record) => {
+      if (!hasExactKeys(record, ['uniqueId', 'row', 'fields']) ||
+          !isSafeIntegerBetween(record.uniqueId, 0, 0xFFFFFFFF) ||
+          !isSafeIntegerBetween(record.row, 0, 0xFFFFFFFF)) {
+        throw invalidRequest('FrTk record selector must use only uniqueId, row, and fields');
+      }
+      return { uniqueId: record.uniqueId, row: record.row, fields: cloneFieldNames(record.fields) };
+    }),
+  };
+}
+
+function cloneTypedValue(value) {
+  if (Number.isSafeInteger(value)) return value;
+  if (hasExactKeys(value, ['uniqueId', 'row']) &&
+      isSafeIntegerBetween(value.uniqueId, 0, 0xFFFFFFFF) &&
+      isSafeIntegerBetween(value.row, 0, 0x1FFFF)) {
+    return { uniqueId: value.uniqueId, row: value.row };
+  }
+  throw new Cfb27HookError('FRTK_FIELD_INVALID', FRTK_ERROR_MESSAGES.FRTK_FIELD_INVALID);
+}
+
+function cloneTransactionOptions(options) {
+  if (!hasExactKeys(options, ['transactionId', 'generation', 'changes']) ||
+      typeof options.transactionId !== 'string' || !FRTK_TRANSACTION_ID.test(options.transactionId) ||
+      !isSafeIntegerBetween(options.generation, 1, Number.MAX_SAFE_INTEGER) ||
+      !Array.isArray(options.changes) || options.changes.length < 1 || options.changes.length > 128) {
+    throw invalidRequest('transactFrtkFields options are invalid');
+  }
+  const identities = new Set();
+  const changes = options.changes.map((change) => {
+    if (!hasExactKeys(change, ['uniqueId', 'row', 'field', 'value']) ||
+        !isSafeIntegerBetween(change.uniqueId, 0, 0xFFFFFFFF) ||
+        !isSafeIntegerBetween(change.row, 0, 0xFFFFFFFF) ||
+        typeof change.field !== 'string' || change.field.length < 1 || change.field.length > 128) {
+      throw invalidRequest('FrTk field change is invalid');
+    }
+    const identity = `${change.uniqueId}:${change.row}:${change.field}`;
+    if (identities.has(identity)) throw invalidRequest('FrTk field changes must be unique');
+    identities.add(identity);
+    return { uniqueId: change.uniqueId, row: change.row, field: change.field,
+      value: cloneTypedValue(change.value) };
+  });
+  return { transactionId: options.transactionId, generation: options.generation, changes };
+}
+
+function cloneInvalidateOptions(options) {
+  if (!hasExactKeys(options, ['reason']) || !FRTK_REASONS.has(options.reason)) {
+    throw invalidRequest('FrTk invalidation reason is invalid');
+  }
+  return { reason: options.reason };
+}
+
+function validBoundedString(value, maximum = 128) {
+  return typeof value === 'string' && value.length >= 1 && value.length <= maximum;
+}
+
+function validateEvidence(value) {
+  if (!Array.isArray(value) || value.length > 64) throw invalidResponse('Invalid FrTk evidence');
+  return value.map((item) => {
+    if (!hasExactKeys(item, ['code', 'fingerprintCount']) || !validBoundedString(item.code) ||
+        !isSafeIntegerBetween(item.fingerprintCount, 0, 64)) {
+      throw invalidResponse('Invalid FrTk evidence');
+    }
+    return { code: item.code, fingerprintCount: item.fingerprintCount };
+  });
+}
+
+function validateLoadResult(result) {
+  if (!hasExactKeys(result, ['profileId', 'schemaIdentity', 'buildIdentity', 'tableCount']) ||
+      !validBoundedString(result.profileId) || !validBoundedString(result.schemaIdentity) ||
+      !validBoundedString(result.buildIdentity) ||
+      !isSafeIntegerBetween(result.tableCount, 1, 4096)) throw invalidResponse('Invalid FrTk profile result');
+  return { profileId: result.profileId, schemaIdentity: result.schemaIdentity,
+    buildIdentity: result.buildIdentity, tableCount: result.tableCount };
+}
+
+function validateDiscoveryResult(result) {
+  if (!hasExactKeys(result, ['generation', 'tableCount']) ||
+      !isSafeIntegerBetween(result.generation, 1, Number.MAX_SAFE_INTEGER) ||
+      !isSafeIntegerBetween(result.tableCount, 1, 4096)) throw invalidResponse('Invalid FrTk discovery result');
+  return { generation: result.generation, tableCount: result.tableCount };
+}
+
+function validateCatalogResult(result, expectedGeneration) {
+  if (!hasExactKeys(result, ['generation', 'tables']) || result.generation !== expectedGeneration ||
+      !Array.isArray(result.tables) || result.tables.length < 1 || result.tables.length > 4096) {
+    throw invalidResponse('Invalid FrTk catalog result');
+  }
+  const uniqueIds = new Set();
+  const tables = result.tables.map((table) => {
+    if (!hasExactKeys(table, ['uniqueId', 'logicalName', 'authorityStatus', 'capacity',
+      'profileId', 'generation', 'evidence']) ||
+        !isSafeIntegerBetween(table.uniqueId, 0, 0xFFFFFFFF) ||
+        !validBoundedString(table.logicalName) || !FRTK_AUTHORITY.has(table.authorityStatus) ||
+        !isSafeIntegerBetween(table.capacity, 1, 0xFFFFFFFF) || !validBoundedString(table.profileId) ||
+        table.generation !== expectedGeneration || uniqueIds.has(table.uniqueId)) {
+      throw invalidResponse('Invalid FrTk catalog table');
+    }
+    uniqueIds.add(table.uniqueId);
+    return { uniqueId: table.uniqueId, logicalName: table.logicalName,
+      authorityStatus: table.authorityStatus, capacity: table.capacity, profileId: table.profileId,
+      generation: table.generation, evidence: validateEvidence(table.evidence) };
+  });
+  return { generation: result.generation, tables };
+}
+
+function validateReadRecordsResult(result, params) {
+  if (!hasExactKeys(result, ['generation', 'records']) || result.generation !== params.generation ||
+      !Array.isArray(result.records) || result.records.length !== params.records.length) {
+    throw invalidResponse('Invalid FrTk records result');
+  }
+  const records = result.records.map((record, index) => {
+    const requested = params.records[index];
+    if (!hasExactKeys(record, ['uniqueId', 'row', 'values']) ||
+        record.uniqueId !== requested.uniqueId || record.row !== requested.row ||
+        !Array.isArray(record.values) || record.values.length !== requested.fields.length) {
+      throw invalidResponse('Invalid FrTk record result');
+    }
+    const values = record.values.map((entry, fieldIndex) => {
+      if (!hasExactKeys(entry, ['field', 'value']) || entry.field !== requested.fields[fieldIndex]) {
+        throw invalidResponse('Invalid FrTk field result');
+      }
+      try { return { field: entry.field, value: cloneTypedValue(entry.value) }; }
+      catch { throw invalidResponse('Invalid FrTk typed value'); }
+    });
+    return { uniqueId: record.uniqueId, row: record.row, values };
+  });
+  return { generation: result.generation, records };
+}
+
+function validateFrtkTransactionResult(result, params) {
+  if (!hasExactKeys(result, ['transactionId', 'status', 'changedFields']) ||
+      result.transactionId !== params.transactionId || result.status !== 'applied_verified' ||
+      result.changedFields !== params.changes.length) throw invalidResponse('Invalid FrTk transaction result');
+  return { transactionId: result.transactionId, status: result.status, changedFields: result.changedFields };
+}
+
+function validateInvalidateResult(result, params) {
+  if (!hasExactKeys(result, ['generation', 'reason']) ||
+      !isSafeIntegerBetween(result.generation, 1, Number.MAX_SAFE_INTEGER) ||
+      result.reason !== params.reason) throw invalidResponse('Invalid FrTk invalidation result');
+  return { generation: result.generation, reason: result.reason };
+}
+
+function sanitizeFrtkError(error) {
+  const code = typeof error?.code === 'string' && Object.hasOwn(FRTK_ERROR_MESSAGES, error.code)
+    ? error.code : 'INVALID_RESPONSE';
+  return new Cfb27HookError(code, FRTK_ERROR_MESSAGES[code]);
+}
+
+function validateFrtkSuccessResponse(response, expectedId) {
+  if (!hasExactKeys(response, ['protocol', 'id', 'ok', 'result']) ||
+      response.protocol !== 1 || response.id !== expectedId || response.ok !== true) {
+    throw invalidResponse('Host returned a malformed FrTk success response');
+  }
+}
+
+function validateFrtkErrorResponse(response, expectedId) {
+  if (!hasExactKeys(response, ['protocol', 'id', 'ok', 'error']) ||
+      response.protocol !== 1 || response.id !== expectedId || response.ok !== false ||
+      !hasExactKeys(response.error, ['code', 'message', 'details']) ||
+      typeof response.error.code !== 'string' || typeof response.error.message !== 'string' ||
+      !isObject(response.error.details)) {
+    throw invalidResponse('Host returned a malformed FrTk error response');
+  }
+  return response.error.code;
+}
 
 function invalidRequest(message) {
   return new Cfb27HookError('INVALID_REQUEST', message);
@@ -411,6 +662,7 @@ function createClient({ pid, pipeName, timeoutMs = 3000 } = {}) {
     throw new Cfb27HookError('INVALID_REQUEST', 'createClient requires a positive PID or pipe name');
   }
   const resolvedPipeName = pipeName || `\\\\.\\pipe\\CFB27LuaHost.v1.${pid}`;
+  const frtkAuthority = new Map();
 
   function request(command, params = {}, {
     hostErrorValidator,
@@ -539,6 +791,42 @@ function createClient({ pid, pipeName, timeoutMs = 3000 } = {}) {
     }
   }
 
+  async function requireFrtkCapability(capability) {
+    const hello = await request('hello');
+    if (!hasExactKeys(hello, ['protocolVersion', 'hostVersion', 'supportedBuild', 'writesAllowed',
+      'capabilities']) || hello.protocolVersion !== 1 || !validBoundedString(hello.hostVersion, 64) ||
+        typeof hello.supportedBuild !== 'boolean' || typeof hello.writesAllowed !== 'boolean' ||
+        !Array.isArray(hello.capabilities) || hello.capabilities.length > 64 ||
+        !hello.capabilities.every((item) => typeof item === 'string') ||
+        new Set(hello.capabilities).size !== hello.capabilities.length ||
+        !hello.capabilities.includes(capability)) {
+      throw new Cfb27HookError(
+        'PROTOCOL_MISMATCH',
+        `Host does not advertise ${capability} capability`,
+      );
+    }
+  }
+
+  async function frtkRequest(capability, command, params, validator) {
+    try {
+      await requireFrtkCapability(capability);
+      return validator(await request(command, params, {
+        hostErrorValidator: validateFrtkErrorResponse,
+        successResponseValidator: validateFrtkSuccessResponse,
+      }));
+    } catch (error) {
+      throw sanitizeFrtkError(error);
+    }
+  }
+
+  async function loadFrtkProfile(bundle = {}) {
+    const params = cloneFrtkBundle(bundle);
+    const result = await frtkRequest(FRTK_CAPABILITIES.profile, 'loadFrtkProfile', params,
+      validateLoadResult);
+    frtkAuthority.clear();
+    return result;
+  }
+
   return Object.freeze({
     request,
     async hello() {
@@ -633,6 +921,69 @@ function createClient({ pid, pipeName, timeoutMs = 3000 } = {}) {
         await request('registerTelemetry', { types: clonedTypes }),
         clonedTypes,
       );
+    },
+    loadFrtkProfile,
+    async loadFrtkProfileFromFile(filePath, options = {}) {
+      if (!hasOnlyKeys(options, ['fileSystem'])) throw invalidRequest('FrTk profile file options are invalid');
+      const fileSystem = options.fileSystem || fs;
+      if (typeof filePath !== 'string' || !filePath || filePath.length > 32768 ||
+          typeof fileSystem?.readFile !== 'function') {
+        throw invalidRequest('FrTk profile file is invalid');
+      }
+      let source;
+      try { source = await fileSystem.readFile(filePath, 'utf8'); }
+      catch { throw new Cfb27HookError('FRTK_PROFILE_INVALID', FRTK_ERROR_MESSAGES.FRTK_PROFILE_INVALID); }
+      let bundle;
+      try { bundle = JSON.parse(source); }
+      catch { throw new Cfb27HookError('FRTK_PROFILE_INVALID', FRTK_ERROR_MESSAGES.FRTK_PROFILE_INVALID); }
+      return loadFrtkProfile(bundle);
+    },
+    async discoverFrtkCatalog(options = {}) {
+      if (!hasExactKeys(options, [])) throw invalidRequest('discoverFrtkCatalog accepts no selectors');
+      const result = await frtkRequest(FRTK_CAPABILITIES.catalog, 'discoverFrtkCatalog', {},
+        validateDiscoveryResult);
+      frtkAuthority.clear();
+      return result;
+    },
+    async inspectFrtkCatalog(options = {}) {
+      const params = cloneGenerationOptions(options);
+      const result = await frtkRequest(FRTK_CAPABILITIES.catalog, 'inspectFrtkCatalog', params,
+        (result) => validateCatalogResult(result, params.generation));
+      frtkAuthority.clear();
+      for (const table of result.tables) {
+        frtkAuthority.set(`${result.generation}:${table.uniqueId}`, table.authorityStatus);
+      }
+      return result;
+    },
+    async readFrtkRecords(options = {}) {
+      const params = cloneRecordOptions(options);
+      return frtkRequest(FRTK_CAPABILITIES.read, 'readFrtkRecords', params,
+        (result) => validateReadRecordsResult(result, params));
+    },
+    async transactFrtkFields(options = {}) {
+      const params = cloneTransactionOptions(options);
+      try {
+        await requireFrtkCapability(FRTK_CAPABILITIES.transaction);
+        if (params.changes.some((change) =>
+          frtkAuthority.get(`${params.generation}:${change.uniqueId}`) !== 'direct_verified')) {
+          throw new Cfb27HookError('FRTK_AUTHORITY_UNPROVEN',
+            FRTK_ERROR_MESSAGES.FRTK_AUTHORITY_UNPROVEN);
+        }
+        const result = await request('transactFrtkFields', params, {
+          hostErrorValidator: validateFrtkErrorResponse,
+          successResponseValidator: validateFrtkSuccessResponse,
+        });
+        return validateFrtkTransactionResult(result, params);
+      } catch (error) {
+        throw sanitizeFrtkError(error);
+      }
+    },
+    async invalidateFrtkCatalog(options = {}) {
+      const params = cloneInvalidateOptions(options);
+      const result = await frtkRequest(FRTK_CAPABILITIES.catalog, 'invalidateFrtkCatalog', params,
+        (result) => validateInvalidateResult(result, params));
+      frtkAuthority.clear();
+      return result;
     },
   });
 }

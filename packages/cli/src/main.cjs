@@ -35,6 +35,14 @@ Commands:
   memory read   Read bounded canonical address ranges (diagnostic)
   memory transact <file.json>
                 Apply one guarded transaction from a JSON request file
+  frtk profile validate <.frtk/profile.json>
+                Validate and load a typed FrTk profile
+  frtk catalog discover <.frtk/profile.json>
+                Load a profile and discover the typed catalog
+  frtk catalog inspect
+                Rediscover and inspect the current typed catalog
+  frtk records read <table> --row N --field <name>...
+                Read typed fields by logical table display name
   telemetry register <type...>
                 Register structured telemetry type names
 
@@ -56,6 +64,8 @@ Options:
   --include-allocation-metadata
                           Include session-only allocation topology in scan matches
   --allow-external-file   Allow a transaction JSON file outside the current directory
+  --row <index>           Typed FrTk record row
+  --field <name>          Typed FrTk field name; may be repeated
   -h, --help              Show this help`;
 
 const defaultIo = {
@@ -101,6 +111,7 @@ function rejectMisplacedDeveloperOptions(command, positionals, options) {
     options.pattern, options.mask, options.maxMatches, options.maxPages, options.context,
     options.includeAllocationMetadata || undefined,
   ];
+  const frtkOptions = [options.row, options.fields.length ? options.fields : undefined];
   if (command !== 'memory' && (scanOptions.some((value) => value !== undefined) ||
       options.ranges.length || options.allowUnsupportedBuild)) {
     throw usageError('Memory diagnostic options are only valid for memory diagnostics; they are not valid for this command');
@@ -111,9 +122,12 @@ function rejectMisplacedDeveloperOptions(command, positionals, options) {
   if (operation === 'read' && scanOptions.some((value) => value !== undefined)) {
     throw usageError('Scan options are not valid for memory read');
   }
+  if (command !== 'frtk' && frtkOptions.some((value) => value !== undefined)) {
+    throw usageError('FrTk record options are only valid for frtk records read');
+  }
   if (operation === 'transact') {
     const hasUnrelatedOption = Object.entries(options).some(([key, value]) => {
-      if (key === 'allowExternalFile') return false;
+      if (key === 'allowExternalFile' || key === 'row' || key === 'fields') return false;
       if (Array.isArray(value)) return value.length > 0;
       if (typeof value === 'boolean') return value;
       return value !== undefined;
@@ -122,9 +136,43 @@ function rejectMisplacedDeveloperOptions(command, positionals, options) {
       throw usageError('This option is not valid for memory transact');
     }
   }
-  if (operation !== 'transact' && options.allowExternalFile) {
-    throw usageError('--allow-external-file is only valid for memory transact');
+  const frtkProfileFile = command === 'frtk' &&
+    ((positionals[0] === 'profile' && positionals[1] === 'validate') ||
+     (positionals[0] === 'catalog' && positionals[1] === 'discover'));
+  if (operation !== 'transact' && !frtkProfileFile && options.allowExternalFile) {
+    throw usageError('--allow-external-file is only valid for memory transact or FrTk profile files');
   }
+}
+
+async function resolveFrtkProfileFile(file, { fileSystem, cwd, allowExternalFile }) {
+  if (typeof file !== 'string' || path.extname(file).toLowerCase() !== '.json') {
+    throw usageError('FrTk profile requires one .json file');
+  }
+  let resolved;
+  let frtkRoot;
+  try {
+    resolved = await fileSystem.realpath(path.resolve(cwd, file));
+    if (!allowExternalFile) frtkRoot = await fileSystem.realpath(path.resolve(cwd, '.frtk'));
+  } catch {
+    throw usageError('Could not resolve FrTk profile file under .frtk');
+  }
+  if (!allowExternalFile) {
+    const relative = path.relative(frtkRoot, resolved);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw usageError('FrTk profile file must be contained under .frtk; pass --allow-external-file to allow it');
+    }
+  }
+  return resolved;
+}
+
+async function createLiveClient(sdk) {
+  const game = await sdk.discoverGame();
+  return sdk.createClient({ pid: game.pid });
+}
+
+async function discoverAndInspect(client) {
+  const discovered = await client.discoverFrtkCatalog();
+  return client.inspectFrtkCatalog({ generation: discovered.generation });
 }
 
 async function readTransactionRequest(file, { fileSystem, cwd, allowExternalFile }) {
@@ -201,6 +249,25 @@ function printCommandSuccess(io, command, result, json) {
     const count = result.types.length;
     io.out(`${count} telemetry ${count === 1 ? 'type' : 'types'} registered`);
     for (const type of result.types) io.out(type);
+    return;
+  }
+  if (command === 'frtk profile validate') {
+    io.out(`FrTk profile ${result.profileId}: ${result.tableCount} tables`);
+    io.out(`Schema ${result.schemaIdentity}; build ${result.buildIdentity}`);
+    return;
+  }
+  if (command === 'frtk catalog discover' || command === 'frtk catalog inspect') {
+    io.out(`FrTk catalog generation ${result.generation}: ${result.tables.length} tables`);
+    for (const table of result.tables) {
+      io.out(`${table.logicalName} (${table.uniqueId}): ${table.capacity} rows, ${table.authorityStatus}`);
+    }
+    return;
+  }
+  if (command === 'frtk records read') {
+    for (const record of result.records) {
+      io.out(`Table ${record.uniqueId}, row ${record.row}`);
+      for (const entry of record.values) io.out(`${entry.field}: ${JSON.stringify(entry.value)}`);
+    }
     return;
   }
   printSuccess(io, command, result, false);
@@ -326,12 +393,70 @@ async function main(argv, {
       if (!types.length) throw usageError('telemetry register requires at least one type name');
       const game = await sdk.discoverGame();
       result = await sdk.createClient({ pid: game.pid }).registerTelemetryTypes(types);
+    } else if (command === 'frtk') {
+      const [group, operation, ...extra] = positionals;
+      const nonFrtkOptions = [options.gameDir, options.mmcDir, options.artifactsDir,
+        options.follow || undefined, options.after, options.pattern, options.mask,
+        options.maxMatches, options.maxPages, options.context,
+        options.ranges.length ? options.ranges : undefined,
+        options.allowUnsupportedBuild || undefined,
+        options.includeAllocationMetadata || undefined];
+      if (nonFrtkOptions.some((value) => value !== undefined)) {
+        throw usageError('This option is not valid for FrTk commands');
+      }
+      if (group === 'profile' && operation === 'validate') {
+        if (extra.length !== 1 || options.row !== undefined || options.fields.length) {
+          throw usageError('frtk profile validate requires exactly one profile JSON file');
+        }
+        const file = await resolveFrtkProfileFile(extra[0], {
+          fileSystem, cwd, allowExternalFile: options.allowExternalFile,
+        });
+        const client = await createLiveClient(sdk);
+        result = await client.loadFrtkProfileFromFile(file, { fileSystem });
+      } else if (group === 'catalog' && operation === 'discover') {
+        if (extra.length !== 1 || options.row !== undefined || options.fields.length) {
+          throw usageError('frtk catalog discover requires exactly one profile JSON file');
+        }
+        const file = await resolveFrtkProfileFile(extra[0], {
+          fileSystem, cwd, allowExternalFile: options.allowExternalFile,
+        });
+        const client = await createLiveClient(sdk);
+        await client.loadFrtkProfileFromFile(file, { fileSystem });
+        result = await discoverAndInspect(client);
+      } else if (group === 'catalog' && operation === 'inspect') {
+        if (extra.length || options.row !== undefined || options.fields.length ||
+            options.allowExternalFile) throw usageError('frtk catalog inspect accepts no arguments');
+        result = await discoverAndInspect(await createLiveClient(sdk));
+      } else if (group === 'records' && operation === 'read') {
+        if (extra.length !== 1 || options.row === undefined || options.fields.length < 1 ||
+            options.fields.length > 64 || options.allowExternalFile ||
+            options.fields.some((field) => typeof field !== 'string' || field.length < 1 ||
+              field.length > 128)) {
+          throw usageError('frtk records read requires one table, --row, and 1 to 64 --field options');
+        }
+        const tableName = extra[0];
+        if (tableName.length < 1 || tableName.length > 128) {
+          throw usageError('FrTk table display name is invalid');
+        }
+        const client = await createLiveClient(sdk);
+        const catalog = await discoverAndInspect(client);
+        const matches = catalog.tables.filter((table) => table.logicalName === tableName);
+        if (matches.length !== 1) throw usageError('FrTk table display name is unknown or ambiguous');
+        result = await client.readFrtkRecords({
+          generation: catalog.generation,
+          records: [{ uniqueId: matches[0].uniqueId, row: options.row, fields: options.fields }],
+        });
+      } else {
+        throw usageError('frtk requires profile validate, catalog discover/inspect, or records read');
+      }
     } else {
       throw usageError(`Unknown command: ${command}`);
     }
 
     const displayCommand = command === 'memory' || command === 'telemetry'
       ? `${command} ${positionals[0]}`
+      : command === 'frtk'
+        ? `${command} ${positionals[0]} ${positionals[1]}`
       : command;
     printCommandSuccess(io, displayCommand, result, json);
     return 0;
@@ -339,7 +464,9 @@ async function main(argv, {
     const safeError = parsed.command === 'memory' && parsed.positionals?.[0] === 'transact'
       ? sanitizeTransactionError(error)
       : error;
-    printError(io, safeError, parsed.json === true);
+    printError(io, safeError, parsed.json === true, {
+      includeDetails: parsed.command !== 'frtk',
+    });
     return exitCodeFor(safeError);
   }
 }

@@ -20,6 +20,27 @@ node packages/cli/bin/cfb27lua.cjs --help
 - `memory read` — read one or more bounded canonical address ranges through the validated SDK.
 - `memory transact <file.json>` — apply one guarded transaction from a JSON request file.
 - `telemetry register <type...>` — register structured telemetry type names for the host session.
+- `frtk profile validate <file.json>` — validate and load a profile bundle.
+- `frtk catalog discover <file.json>` — load a profile, discover tables, and print the sanitized catalog.
+- `frtk catalog inspect` — rediscover and inspect the loaded catalog.
+- `frtk records read <table> --row N --field <name>...` — read typed fields. The table name is display-only; the CLI resolves it to the SDK's `uniqueId` selector.
+
+FrTk profile inputs must resolve beneath the current workspace's `.frtk/`
+directory. Junction and symlink targets are checked after resolution. Use
+`--allow-external-file` only for an intentional existing external profile. Raw
+profile JSON is read only by the SDK profile-file loader and is never printed.
+
+```powershell
+node packages/cli/bin/cfb27lua.cjs frtk profile validate .frtk/profile.json
+node packages/cli/bin/cfb27lua.cjs frtk catalog discover .frtk/profile.json
+node packages/cli/bin/cfb27lua.cjs frtk catalog inspect
+node packages/cli/bin/cfb27lua.cjs frtk records read Recruit `
+  --row 7 --field CommitScore --field RecruitStage --json
+```
+
+FrTk output contains typed catalog identity, capacities, authority status,
+evidence, rows, field names, and typed values. It never exposes addresses, raw
+bytes, patterns, masks, field offsets, memory ranges, or transaction operations.
 
 The memory scan and read commands are read-only developer diagnostics. A scan requires
 `--pattern`, `--mask`, `--max-matches`, and `--context`; context is applied on
