@@ -1,0 +1,245 @@
+#include "frtk_catalog.h"
+
+#include <algorithm>
+#include <limits>
+#include <set>
+
+namespace cfb27::frtk {
+namespace {
+
+bool AddOverflows(std::uintptr_t left, std::size_t right) {
+  return right > std::numeric_limits<std::uintptr_t>::max() - left;
+}
+
+bool MultiplyOverflows(std::size_t left, std::size_t right) {
+  return left != 0 && right > std::numeric_limits<std::size_t>::max() / left;
+}
+
+bool MaskedMatches(const RowFingerprint& fingerprint,
+                   const std::vector<std::uint8_t>& bytes) {
+  if (bytes.size() != fingerprint.pattern.size() ||
+      fingerprint.mask.size() != fingerprint.pattern.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < bytes.size(); ++index) {
+    if ((bytes[index] & fingerprint.mask[index]) !=
+        (fingerprint.pattern[index] & fingerprint.mask[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::uint32_t ReadLittleEndian(const std::vector<std::uint8_t>& bytes) {
+  std::uint32_t value{};
+  for (std::size_t index = 0; index < bytes.size() && index < 4; ++index) {
+    value |= static_cast<std::uint32_t>(bytes[index]) << (index * 8);
+  }
+  return value;
+}
+
+}  // namespace
+
+void SessionCatalog::AdvanceGeneration() {
+  ++generation_;
+  if (generation_ == 0) ++generation_;
+}
+
+std::uint64_t SessionCatalog::Install(const ProfileBundle& profile,
+                                      const DiscoveryResult& discovery) {
+  AdvanceGeneration();
+  entries_.clear();
+  schema_ = profile.schema;
+  game_ready_ = true;
+  if (!discovery.valid) return generation_;
+
+  for (const auto& table : profile.tables) {
+    const auto found = std::find_if(
+        discovery.tables.begin(), discovery.tables.end(),
+        [&](const TableDiscovery& candidate) {
+          return candidate.unique_id == table.unique_id;
+        });
+    if (found == discovery.tables.end() ||
+        found->state != TableState::kResolved || !found->descriptor) {
+      continue;
+    }
+    const auto& discovered = *found->descriptor;
+    if (discovered.unique_id != table.unique_id ||
+        discovered.stride > std::numeric_limits<std::uint32_t>::max() ||
+        discovered.capacity != table.capacity ||
+        discovered.stride != table.record_size) {
+      continue;
+    }
+    entries_.push_back({
+        .descriptor = {.unique_id = table.unique_id,
+                       .session_table_id = table.table_id,
+                       .base_address = discovered.base,
+                       .stride = static_cast<std::uint32_t>(discovered.stride),
+                       .capacity = discovered.capacity,
+                       .allocation_base = discovered.allocation_base,
+                       .allocation_size = discovered.allocation_size,
+                       .profile_id = profile.profile_id,
+                       .lifecycle_generation = generation_,
+                       .evidence = found->evidence},
+        .profile = table});
+  }
+  return generation_;
+}
+
+std::optional<TableHandle> SessionCatalog::GetHandle(
+    std::uint32_t unique_id) const {
+  const auto found = std::find_if(entries_.begin(), entries_.end(),
+                                  [unique_id](const Entry& entry) {
+                                    return entry.descriptor.unique_id == unique_id;
+                                  });
+  if (found == entries_.end()) return std::nullopt;
+  return TableHandle{unique_id, generation_};
+}
+
+const CatalogDescriptor* SessionCatalog::Resolve(TableHandle handle) const {
+  if (handle.generation != generation_) return nullptr;
+  const auto found = std::find_if(entries_.begin(), entries_.end(),
+                                  [&](const Entry& entry) {
+                                    return entry.descriptor.unique_id ==
+                                               handle.unique_id &&
+                                           entry.descriptor.lifecycle_generation ==
+                                               generation_;
+                                  });
+  return found == entries_.end() ? nullptr : &found->descriptor;
+}
+
+void SessionCatalog::Invalidate() {
+  AdvanceGeneration();
+  entries_.clear();
+}
+
+void SessionCatalog::AdvanceLifecycle(bool game_ready) {
+  if (!game_ready && game_ready_) {
+    Invalidate();
+    game_ready_ = false;
+  } else if (game_ready) {
+    game_ready_ = true;
+  }
+}
+
+bool SessionCatalog::Revalidate(DiscoveryBackend& backend) {
+  if (entries_.empty()) return false;
+
+  enum class CheckKind { kSentinel, kRelationship };
+  struct Check {
+    CheckKind kind;
+    std::uint32_t source_unique_id;
+    const RowFingerprint* sentinel{};
+    const RelationshipConstraint* relationship{};
+  };
+
+  std::set<std::uint32_t> quarantined;
+  std::vector<ReadRequest> requests;
+  std::vector<Check> checks;
+  for (const auto& entry : entries_) {
+    const auto& descriptor = entry.descriptor;
+    if (!backend.AllocationExists(descriptor.allocation_base,
+                                  descriptor.allocation_size)) {
+      quarantined.insert(descriptor.unique_id);
+      continue;
+    }
+    for (const auto& sentinel : entry.profile.rows) {
+      if (sentinel.row_index >= descriptor.capacity ||
+          MultiplyOverflows(sentinel.row_index, descriptor.stride)) {
+        quarantined.insert(descriptor.unique_id);
+        continue;
+      }
+      const auto offset =
+          static_cast<std::size_t>(sentinel.row_index) * descriptor.stride;
+      if (AddOverflows(descriptor.base_address, offset)) {
+        quarantined.insert(descriptor.unique_id);
+        continue;
+      }
+      requests.push_back({descriptor.base_address + offset,
+                          sentinel.pattern.size()});
+      checks.push_back({CheckKind::kSentinel, descriptor.unique_id, &sentinel});
+    }
+    for (const auto& relationship : entry.profile.relationships) {
+      const auto* field = schema_.FindField(descriptor.session_table_id,
+                                            relationship.field_name);
+      const auto target = std::find_if(
+          entries_.begin(), entries_.end(), [&](const Entry& candidate) {
+            return candidate.descriptor.session_table_id ==
+                   relationship.target_table_id;
+          });
+      if (!field || field->encoding != "packed-reference" ||
+          relationship.source_row >= descriptor.capacity ||
+          target == entries_.end() ||
+          relationship.target_row >= target->descriptor.capacity ||
+          MultiplyOverflows(relationship.source_row, descriptor.stride)) {
+        quarantined.insert(descriptor.unique_id);
+        continue;
+      }
+      const auto row_offset =
+          static_cast<std::size_t>(relationship.source_row) * descriptor.stride;
+      if (AddOverflows(descriptor.base_address, row_offset) ||
+          AddOverflows(descriptor.base_address + row_offset,
+                       field->byte_offset)) {
+        quarantined.insert(descriptor.unique_id);
+        continue;
+      }
+      requests.push_back({descriptor.base_address + row_offset +
+                              field->byte_offset,
+                          field->storage_bytes});
+      checks.push_back(
+          {CheckKind::kRelationship, descriptor.unique_id, nullptr,
+           &relationship});
+    }
+  }
+
+  std::vector<std::vector<std::uint8_t>> bytes;
+  if (!requests.empty() &&
+      (!backend.ReadBatch(requests, bytes) || bytes.size() != requests.size())) {
+    for (const auto& check : checks) quarantined.insert(check.source_unique_id);
+  } else {
+    for (std::size_t index = 0; index < checks.size(); ++index) {
+      const auto& check = checks[index];
+      if (check.kind == CheckKind::kSentinel) {
+        if (!MaskedMatches(*check.sentinel, bytes[index])) {
+          quarantined.insert(check.source_unique_id);
+        }
+      } else {
+        if (bytes[index].size() != 4) {
+          quarantined.insert(check.source_unique_id);
+          continue;
+        }
+        const auto decoded = DecodePackedReference(ReadLittleEndian(bytes[index]));
+        if (decoded.table_id != check.relationship->target_table_id ||
+            decoded.row_index != check.relationship->target_row) {
+          quarantined.insert(check.source_unique_id);
+        }
+      }
+    }
+  }
+
+  if (quarantined.empty()) return true;
+  AdvanceGeneration();
+  std::erase_if(entries_, [&](const Entry& entry) {
+    return quarantined.contains(entry.descriptor.unique_id);
+  });
+  for (auto& entry : entries_) {
+    entry.descriptor.lifecycle_generation = generation_;
+  }
+  return false;
+}
+
+std::vector<CatalogSummary> SessionCatalog::Summaries() const {
+  std::vector<CatalogSummary> result;
+  result.reserve(entries_.size());
+  for (const auto& entry : entries_) {
+    result.push_back({.unique_id = entry.descriptor.unique_id,
+                      .capacity = entry.descriptor.capacity,
+                      .profile_id = entry.descriptor.profile_id,
+                      .lifecycle_generation =
+                          entry.descriptor.lifecycle_generation,
+                      .evidence = entry.descriptor.evidence});
+  }
+  return result;
+}
+
+}  // namespace cfb27::frtk
