@@ -54,6 +54,12 @@ std::uint64_t SessionCatalog::Install(const ProfileBundle& profile,
   if (!discovery.valid) return generation_;
 
   for (const auto& table : profile.tables) {
+    const auto* installed_schema = profile.schema.FindTable(table.table_id);
+    if (!installed_schema || installed_schema->unique_id != table.unique_id ||
+        installed_schema->capacity != table.capacity ||
+        installed_schema->record_size != table.record_size) {
+      continue;
+    }
     const auto found = std::find_if(
         discovery.tables.begin(), discovery.tables.end(),
         [&](const TableDiscovery& candidate) {
@@ -80,6 +86,7 @@ std::uint64_t SessionCatalog::Install(const ProfileBundle& profile,
                        .allocation_size = discovered.allocation_size,
                        .profile_id = profile.profile_id,
                        .lifecycle_generation = generation_,
+                       .authority_status = installed_schema->authority_status,
                        .evidence = found->evidence},
         .profile = table});
   }
@@ -217,6 +224,27 @@ bool SessionCatalog::Revalidate(DiscoveryBackend& backend) {
     }
   }
 
+  bool closure_changed = true;
+  while (closure_changed) {
+    closure_changed = false;
+    for (const auto& entry : entries_) {
+      if (quarantined.contains(entry.descriptor.unique_id)) continue;
+      for (const auto& relationship : entry.profile.relationships) {
+        const auto target = std::find_if(
+            entries_.begin(), entries_.end(), [&](const Entry& candidate) {
+              return candidate.descriptor.session_table_id ==
+                     relationship.target_table_id;
+            });
+        if (target == entries_.end() ||
+            quarantined.contains(target->descriptor.unique_id)) {
+          quarantined.insert(entry.descriptor.unique_id);
+          closure_changed = true;
+          break;
+        }
+      }
+    }
+  }
+
   if (quarantined.empty()) return true;
   AdvanceGeneration();
   std::erase_if(entries_, [&](const Entry& entry) {
@@ -226,6 +254,18 @@ bool SessionCatalog::Revalidate(DiscoveryBackend& backend) {
     entry.descriptor.lifecycle_generation = generation_;
   }
   return false;
+}
+
+bool SessionCatalog::IsActiveReferenceTarget(
+    std::uint16_t session_table_id, std::uint32_t row,
+    std::uint64_t generation) const {
+  if (generation != generation_) return false;
+  const auto target = std::find_if(
+      entries_.begin(), entries_.end(), [&](const Entry& entry) {
+        return entry.descriptor.session_table_id == session_table_id &&
+               entry.descriptor.lifecycle_generation == generation_;
+      });
+  return target != entries_.end() && row < target->descriptor.capacity;
 }
 
 std::vector<CatalogSummary> SessionCatalog::Summaries() const {

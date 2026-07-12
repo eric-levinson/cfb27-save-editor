@@ -100,6 +100,72 @@ Backend ValidBackend() {
   return backend;
 }
 
+ProfileBundle ClosureBundle() {
+  ProfileBundle result;
+  result.profile_id = "closure-profile";
+  result.tables = {
+      {.logical_name = "Target", .table_id = 10, .unique_id = 100,
+       .capacity = 2, .record_size = 8,
+       .rows = {{.row_index = 0, .pattern = {1}, .mask = {255}}}},
+      {.logical_name = "Direct", .table_id = 20, .unique_id = 200,
+       .capacity = 2, .record_size = 8,
+       .relationships = {{.source_row = 0, .field_name = "TargetRef",
+                          .target_table_id = 10, .target_row = 0}}},
+      {.logical_name = "Transitive", .table_id = 30, .unique_id = 300,
+       .capacity = 2, .record_size = 8,
+       .relationships = {{.source_row = 0, .field_name = "DirectRef",
+                          .target_table_id = 20, .target_row = 0}}},
+      {.logical_name = "Unrelated", .table_id = 40, .unique_id = 400,
+       .capacity = 2, .record_size = 8},
+  };
+  auto packed = [](const char* name, unsigned target) {
+    return nlohmann::json{{"name", name}, {"encoding", "packed-reference"},
+      {"byteOffset", 4}, {"storageBytes", 4}, {"bitOffset", 0},
+      {"bitWidth", 32}, {"minimum", 0}, {"maximum", 0xFFFFFFFFull},
+      {"referenceTableId", target}};
+  };
+  nlohmann::json tables = nlohmann::json::array();
+  tables.push_back({{"logicalName", "Target"}, {"tableId", 10},
+                    {"uniqueId", 100}, {"capacity", 2}, {"recordSize", 8},
+                    {"authorityStatus", "discovery_only"},
+                    {"fields", nlohmann::json::array()}});
+  tables.push_back({{"logicalName", "Direct"}, {"tableId", 20},
+                    {"uniqueId", 200}, {"capacity", 2}, {"recordSize", 8},
+                    {"authorityStatus", "discovery_only"},
+                    {"fields", nlohmann::json::array({packed("TargetRef", 10)})}});
+  tables.push_back({{"logicalName", "Transitive"}, {"tableId", 30},
+                    {"uniqueId", 300}, {"capacity", 2}, {"recordSize", 8},
+                    {"authorityStatus", "discovery_only"},
+                    {"fields", nlohmann::json::array({packed("DirectRef", 20)})}});
+  tables.push_back({{"logicalName", "Unrelated"}, {"tableId", 40},
+                    {"uniqueId", 400}, {"capacity", 2}, {"recordSize", 8},
+                    {"authorityStatus", "discovery_only"},
+                    {"fields", nlohmann::json::array()}});
+  std::string error;
+  Require(result.schema.Load({{"formatVersion", 1},
+                              {"schemaIdentity", "closure-schema"},
+                              {"buildIdentity", "closure-build"},
+                              {"tables", std::move(tables)}}, &error),
+          error.c_str());
+  return result;
+}
+
+DiscoveryResult ClosureDiscovery() {
+  DiscoveryResult result;
+  for (const auto [unique_id, base] :
+       {std::pair{100u, std::uintptr_t{0x3000}},
+        std::pair{200u, std::uintptr_t{0x4000}},
+        std::pair{300u, std::uintptr_t{0x5000}},
+        std::pair{400u, std::uintptr_t{0x6000}}}) {
+    result.tables.push_back(
+        {.unique_id = unique_id, .state = TableState::kResolved,
+         .descriptor = TableDescriptor{.unique_id = unique_id, .base = base,
+             .stride = 8, .capacity = 2, .allocation_base = base,
+             .allocation_size = 16}});
+  }
+  return result;
+}
+
 void TestGenerationAndPublicSurface() {
   SessionCatalog catalog;
   const auto profile = Bundle();
@@ -157,12 +223,29 @@ void TestLifecycleAndRevalidation() {
               catalog.GetHandle(220022).has_value(),
           "relationship failure did not quarantine dependent descriptor");
 }
+
+void TestTransitiveDependencyQuarantine() {
+  SessionCatalog catalog;
+  catalog.Install(ClosureBundle(), ClosureDiscovery());
+  Backend backend;
+  backend.reads = {{0x3000, {9}},
+                   {0x4004, {0, 0, 20, 0}},
+                   {0x5004, {0, 0, 40, 0}}};
+  Require(!catalog.Revalidate(backend), "target mismatch did not fail validation");
+  Require(!catalog.GetHandle(100) && !catalog.GetHandle(200) &&
+              !catalog.GetHandle(300),
+          "dependency quarantine did not compute transitive closure");
+  const auto unrelated = catalog.GetHandle(400);
+  Require(unrelated && catalog.Resolve(*unrelated),
+          "dependency quarantine removed unrelated descriptor");
+}
 }  // namespace
 
 int main() {
   try {
     TestGenerationAndPublicSurface();
     TestLifecycleAndRevalidation();
+    TestTransitiveDependencyQuarantine();
     std::cout << "frtk catalog smoke passed\n";
     return 0;
   } catch (const std::exception& error) {

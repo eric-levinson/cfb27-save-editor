@@ -26,6 +26,7 @@ struct CatalogDescriptor {
   std::size_t allocation_size{};
   std::string profile_id;
   std::uint64_t lifecycle_generation{};
+  AuthorityStatus authority_status{AuthorityStatus::kDiscoveryOnly};
   std::vector<DiscoveryEvidence> evidence;
 };
 
@@ -47,6 +48,9 @@ class SessionCatalog {
   void Invalidate();
   void AdvanceLifecycle(bool game_ready);
   bool Revalidate(DiscoveryBackend& backend);
+  [[nodiscard]] bool IsActiveReferenceTarget(
+      std::uint16_t session_table_id, std::uint32_t row,
+      std::uint64_t generation) const;
 
   [[nodiscard]] std::vector<CatalogSummary> Summaries() const;
   [[nodiscard]] std::uint64_t generation() const { return generation_; }

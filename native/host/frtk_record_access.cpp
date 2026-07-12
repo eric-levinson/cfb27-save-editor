@@ -45,16 +45,16 @@ bool RowAddress(const CatalogDescriptor& descriptor, std::uint32_t row,
   return true;
 }
 
-bool ValidReference(const SchemaRegistry& schema, const FieldDefinition& field,
-                    const DecodedField& value) {
+bool ValidReference(const SessionCatalog& catalog, std::uint64_t generation,
+                    const FieldDefinition& field, const DecodedField& value) {
   if (field.encoding != "packed-reference") return true;
   const auto* reference = std::get_if<PackedReference>(&value);
   if (!reference || !field.reference_table_id ||
       reference->table_id != *field.reference_table_id) {
     return false;
   }
-  const auto* target = schema.FindTable(reference->table_id);
-  return target && reference->row_index < target->capacity;
+  return catalog.IsActiveReferenceTarget(reference->table_id,
+                                         reference->row_index, generation);
 }
 
 }  // namespace
@@ -86,7 +86,8 @@ FieldReadResult RecordAccessor::ReadFields(
   try {
     for (std::size_t index = 0; index < definitions.size(); ++index) {
       auto value = DecodeField(record, *definitions[index]);
-      if (!ValidReference(schema_, *definitions[index], value)) {
+      if (!ValidReference(catalog_, handle.generation, *definitions[index],
+                          value)) {
         return {.code = kInvalid};
       }
       result.fields.push_back({std::string(fields[index]), std::move(value)});
@@ -105,7 +106,7 @@ FieldWritePlan RecordAccessor::PlanFieldWrites(
   if (!descriptor) return {.code = kStale};
   const auto* table = SchemaFor(schema_, *descriptor);
   if (!table) return {.code = kInvalid};
-  if (table->authority_status != AuthorityStatus::kDirectVerified) {
+  if (descriptor->authority_status != AuthorityStatus::kDirectVerified) {
     return {.code = "AUTHORITY_UNPROVEN"};
   }
   std::uintptr_t address{};
@@ -118,7 +119,8 @@ FieldWritePlan RecordAccessor::PlanFieldWrites(
   for (const auto& change : changes) {
     if (!names.insert(change.name).second) return {.code = kInvalid};
     const auto* field = schema_.FindField(table->table_id, change.name);
-    if (!field || !ValidReference(schema_, *field, change.value)) {
+    if (!field || !ValidReference(catalog_, handle.generation, *field,
+                                  change.value)) {
       return {.code = kInvalid};
     }
     definitions.push_back(field);

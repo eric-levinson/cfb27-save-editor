@@ -68,11 +68,18 @@ DiscoveryResult Discovery() {
 class Backend final : public DiscoveryBackend, public cfb27::memory::MemoryBackend {
  public:
   std::map<std::uintptr_t, std::vector<std::uint8_t>> records;
+  std::map<std::uintptr_t, std::vector<std::uint8_t>> validation_reads;
   std::size_t record_reads{};
   ScanObservationResult Scan(const RowFingerprint&, std::size_t) override { return {}; }
-  bool ReadBatch(std::span<const ReadRequest>,
+  bool ReadBatch(std::span<const ReadRequest> requests,
                  std::vector<std::vector<std::uint8_t>>& out) override {
     out.clear();
+    for (const auto& request : requests) {
+      const auto found = validation_reads.find(request.address);
+      if (found == validation_reads.end() ||
+          found->second.size() != request.length) return false;
+      out.push_back(found->second);
+    }
     return true;
   }
   bool AllocationExists(std::uintptr_t, std::size_t) override { return true; }
@@ -162,12 +169,49 @@ void TestPlansAndAuthority() {
                 gated_backend.record_reads == 0,
             "unproven authority reached transaction planning");
   }
+
+  auto installed = Bundle("discovery_only");
+  auto external = Bundle("direct_verified");
+  SessionCatalog installed_catalog;
+  installed_catalog.Install(installed, Discovery());
+  Backend mismatched_backend;
+  mismatched_backend.records[0x2000] = backend.records[0x2000];
+  RecordAccessor mismatched(installed_catalog, external.schema,
+                            mismatched_backend, mismatched_backend);
+  const auto mismatched_plan = mismatched.PlanFieldWrites(
+      *installed_catalog.GetHandle(330033), 0,
+      {{"Score", std::int64_t{7}}});
+  Require(!mismatched_plan.ok &&
+              mismatched_plan.code == "AUTHORITY_UNPROVEN" &&
+              mismatched_plan.operations.empty() &&
+              mismatched_backend.record_reads == 0,
+          "external schema escalated installed table authority");
+}
+
+void TestPackedReferenceRequiresActiveTarget() {
+  auto profile = Bundle("direct_verified");
+  profile.tables[0].rows = {
+      {.row_index = 0, .pattern = {1}, .mask = {255}}};
+  SessionCatalog catalog;
+  catalog.Install(profile, Discovery());
+  Backend backend;
+  backend.validation_reads[0x1000] = {9};
+  backend.records[0x2000] = {0, 0, 0, 0, 2, 0, 44, 0};
+  Require(!catalog.Revalidate(backend) && !catalog.GetHandle(220022) &&
+              catalog.GetHandle(330033),
+          "fixture did not quarantine only packed-reference target");
+  RecordAccessor accessor(catalog, profile.schema, backend, backend);
+  const auto result = accessor.ReadFields(*catalog.GetHandle(330033), 0,
+                                          {"TargetRef"});
+  Require(!result.ok && result.code == "FIELD_INVALID",
+          "packed reference accepted a target absent from active catalog");
 }
 }  // namespace
 
 int main() {
   try {
     TestReadsAndValidation();
+    TestPackedReferenceRequiresActiveTarget();
     TestPlansAndAuthority();
     std::cout << "frtk record access smoke passed\n";
     return 0;
