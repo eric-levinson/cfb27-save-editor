@@ -19,6 +19,7 @@ using cfb27::memory::ReadMemoryBatch;
 using cfb27::memory::ScanPrivateMemory;
 
 std::uintptr_t g_fail_read_at{};
+std::uintptr_t g_fail_query_at{};
 std::uintptr_t g_scan_destination{};
 bool g_attempted_scan_buffer_read{};
 bool g_scan_destination_is_mapped{};
@@ -45,6 +46,12 @@ bool TestRead(const void* source, void* destination, std::size_t length,
 
 void Require(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
+}
+
+SIZE_T TestQuery(const void* address, MEMORY_BASIC_INFORMATION* info,
+                 SIZE_T length) {
+  if (reinterpret_cast<std::uintptr_t>(address) == g_fail_query_at) return 0;
+  return VirtualQuery(address, info, length);
 }
 
 void RequireMappedStorage(const void* pointer, const char* message) {
@@ -104,6 +111,9 @@ class Allocation {
  private:
   void* address_{};
 };
+
+std::size_t CountAddress(const std::vector<cfb27::memory::ScanMatch>& matches,
+                         const void* address);
 
 void TestAddressParsing() {
   const auto value = reinterpret_cast<std::uintptr_t>(&TestAddressParsing);
@@ -199,8 +209,59 @@ void TestScanExcludesMaskBuffer() {
   }
 }
 
-std::size_t CountAddress(const std::vector<cfb27::memory::ScanMatch>& matches,
-                         const void* address);
+void TestAllocationTopology() {
+  SYSTEM_INFO system_info{};
+  GetSystemInfo(&system_info);
+  const auto page_size = static_cast<std::size_t>(system_info.dwPageSize);
+  auto* allocation = static_cast<std::uint8_t*>(
+      VirtualAlloc(nullptr, page_size * 3, MEM_RESERVE, PAGE_READWRITE));
+  Require(allocation != nullptr, "reserve topology allocation");
+  Require(VirtualAlloc(allocation, page_size, MEM_COMMIT, PAGE_READWRITE) == allocation,
+          "commit first topology page");
+  Require(VirtualAlloc(allocation + page_size, page_size, MEM_COMMIT, PAGE_READWRITE) ==
+              allocation + page_size,
+          "commit middle topology page");
+  Require(VirtualAlloc(allocation + page_size * 2, page_size, MEM_COMMIT, PAGE_READWRITE) ==
+              allocation + page_size * 2,
+          "commit final topology page");
+  DWORD prior{};
+  Require(VirtualProtect(allocation, page_size, PAGE_READONLY, &prior) != FALSE,
+          "protect first topology page");
+  Require(VirtualProtect(allocation + page_size * 2, page_size, PAGE_EXECUTE_READ,
+                         &prior) != FALSE,
+          "protect final topology page");
+
+  auto sentinel = HexBytes("A93E710CF4B8256D013579BDF2468ACE");
+  auto* target = allocation + page_size + 128;
+  std::memcpy(target, sentinel.data(), sentinel.size());
+  cfb27::memory::ScanRequest request{
+      .pattern = MappedCopy(sentinel),
+      .mask = MappedFill(sentinel.size(), 0xFF),
+      .max_matches = 1,
+      .cursor = FormatAddress(reinterpret_cast<std::uintptr_t>(allocation)),
+      .include_allocation_metadata = true,
+  };
+  SecureZeroMemory(sentinel.data(), sentinel.size());
+  sentinel.clear();
+  sentinel.shrink_to_fit();
+
+  const auto scan = ScanPrivateMemory(request, TestRead, TestQuery);
+  Require(scan.code.empty() && CountAddress(scan.matches, target) == 1,
+          "allocation topology match found");
+  const auto& metadata = *scan.matches[0].allocation;
+  Require(metadata.base == FormatAddress(reinterpret_cast<std::uintptr_t>(allocation)),
+          "allocation topology base");
+  Require(metadata.size == page_size * 3, "allocation topology full extent");
+  Require(metadata.protection == PAGE_READWRITE, "allocation topology initial protection");
+  Require(metadata.offset == page_size + 128, "allocation topology checked offset");
+
+  g_fail_query_at = reinterpret_cast<std::uintptr_t>(allocation) + page_size * 3;
+  const auto failed = ScanPrivateMemory(request, TestRead, TestQuery);
+  Require(failed.code == "MEMORY_ACCESS_DENIED" && failed.matches.empty(),
+          "allocation extent query failure discards matches");
+  g_fail_query_at = 0;
+  VirtualFree(allocation, 0, MEM_RELEASE);
+}
 
 void TestRetainedContextCannotSelfMatch() {
   constexpr std::size_t kAllocationSize = 64 * 1024;
@@ -460,6 +521,7 @@ int main() {
     TestAddressParsing();
     TestRegionEligibility();
     TestScanAndRead();
+    TestAllocationTopology();
     TestScanExcludesMaskBuffer();
     TestRetainedContextCannotSelfMatch();
     TestPagedLargeRegionAndBoundaries();

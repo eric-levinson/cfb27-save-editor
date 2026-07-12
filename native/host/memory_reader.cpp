@@ -5,6 +5,7 @@
 #include <cctype>
 #include <limits>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 
 namespace cfb27::memory {
@@ -109,6 +110,75 @@ MappedBytes::~MappedBytes() {
     UnmapViewOfFile(view_);
   }
   if (mapping_ != nullptr) CloseHandle(mapping_);
+}
+
+SIZE_T ProductionQuery(const void* address, MEMORY_BASIC_INFORMATION* information,
+                       SIZE_T length) {
+  return VirtualQuery(address, information, length);
+}
+
+struct AllocationExtent {
+  std::size_t size{};
+  DWORD protection{};
+};
+
+std::optional<AllocationMetadata> ResolveAllocationMetadata(
+    std::uintptr_t match_address, const MEMORY_BASIC_INFORMATION& match_info,
+    std::uintptr_t maximum, ScanQueryFunction query,
+    std::unordered_map<std::uintptr_t, AllocationExtent>& extents) {
+  const auto allocation_base =
+      reinterpret_cast<std::uintptr_t>(match_info.AllocationBase);
+  if (allocation_base == 0 || match_address < allocation_base) return std::nullopt;
+
+  auto cached = extents.find(allocation_base);
+  if (cached == extents.end()) {
+    auto cursor = allocation_base;
+    std::size_t allocation_size = 0;
+    DWORD allocation_protection = 0;
+    bool first = true;
+    while (cursor <= maximum) {
+      MEMORY_BASIC_INFORMATION info{};
+      if (query(reinterpret_cast<const void*>(cursor), &info, sizeof(info)) !=
+          sizeof(info)) {
+        return std::nullopt;
+      }
+      const auto base = reinterpret_cast<std::uintptr_t>(info.BaseAddress);
+      const auto queried_allocation =
+          reinterpret_cast<std::uintptr_t>(info.AllocationBase);
+      if (queried_allocation != allocation_base) break;
+      if (base != cursor || info.RegionSize == 0 ||
+          AddOverflows(base, info.RegionSize) ||
+          SizeAddOverflows(allocation_size, info.RegionSize)) {
+        return std::nullopt;
+      }
+      if (first) {
+        allocation_protection = info.AllocationProtect;
+        first = false;
+      }
+      allocation_size += info.RegionSize;
+      const auto next = base + info.RegionSize;
+      if (next <= cursor) return std::nullopt;
+      if (next > maximum) {
+        const auto capped_size = maximum - allocation_base + 1;
+        allocation_size = static_cast<std::size_t>(capped_size);
+        cursor = next;
+        break;
+      }
+      cursor = next;
+    }
+    if (first || allocation_size == 0) return std::nullopt;
+    cached = extents.emplace(allocation_base,
+                             AllocationExtent{allocation_size,
+                                              allocation_protection}).first;
+  }
+
+  const auto offset_value = match_address - allocation_base;
+  if (offset_value > std::numeric_limits<std::size_t>::max()) return std::nullopt;
+  const auto offset = static_cast<std::size_t>(offset_value);
+  if (offset >= cached->second.size) return std::nullopt;
+  return AllocationMetadata{
+      FormatAddress(allocation_base), cached->second.size,
+      cached->second.protection, offset};
 }
 
 MappedBytes::MappedBytes(MappedBytes&& other) noexcept
@@ -257,7 +327,8 @@ BatchReadResult ReadMemoryBatch(const std::vector<ReadRange>& ranges) {
   return result;
 }
 
-ScanResult ScanPrivateMemory(const ScanRequest& request, ScanReadFunction read) {
+ScanResult ScanPrivateMemory(const ScanRequest& request, ScanReadFunction read,
+                             ScanQueryFunction query) {
   ScanResult result;
   if (request.pattern.size() < kMinPatternBytes ||
       request.pattern.size() > kMaxPatternBytes ||
@@ -294,11 +365,13 @@ ScanResult ScanPrivateMemory(const ScanRequest& request, ScanReadFunction read) 
   const auto buffer_begin = reinterpret_cast<std::uintptr_t>(scan_buffer->data());
   const auto buffer_end = buffer_begin + buffer_capacity;
   const auto read_chunk = read != nullptr ? read : ProductionRead;
+  const auto query_region = query != nullptr ? query : ProductionQuery;
+  std::unordered_map<std::uintptr_t, AllocationExtent> allocation_extents;
   result.matches.reserve(request.max_matches + 1);
 
   while (cursor <= maximum) {
     MEMORY_BASIC_INFORMATION info{};
-    if (VirtualQuery(reinterpret_cast<const void*>(cursor), &info, sizeof(info)) != sizeof(info)) {
+    if (query_region(reinterpret_cast<const void*>(cursor), &info, sizeof(info)) != sizeof(info)) {
       result.code = kMemoryAccessDenied;
       return result;
     }
@@ -380,6 +453,15 @@ ScanResult ScanPrivateMemory(const ScanRequest& request, ScanReadFunction read) 
           return result;
         }
         match.context = std::move(*context);
+        if (request.include_allocation_metadata) {
+          match.allocation = ResolveAllocationMetadata(
+              match_address, info, maximum, query_region, allocation_extents);
+          if (!match.allocation) {
+            result.matches.clear();
+            result.code = kMemoryAccessDenied;
+            return result;
+          }
+        }
         result.matches.push_back(std::move(match));
 
         if (result.matches.size() > request.max_matches) {

@@ -106,6 +106,17 @@ const VALID_READ_RESULT = Object.freeze({
   })]),
 });
 
+const VALID_ALLOCATION_SCAN_RESULT = Object.freeze({
+  ...VALID_SCAN_RESULT,
+  matches: Object.freeze([Object.freeze({
+    ...VALID_SCAN_RESULT.matches[0],
+    allocationBase: '0x7FF612340000',
+    allocationSize: 65536,
+    allocationProtect: 4,
+    offsetInAllocation: 128,
+  })]),
+});
+
 const VALID_TRANSACTION_REQUEST = Object.freeze({
   transactionId: 'recruiting.influence-proof-1',
   operations: Object.freeze([Object.freeze({
@@ -565,6 +576,100 @@ test('memory APIs clone options and send exact typed commands', async (t) => {
   ]);
 });
 
+test('opt-in allocation scans clone the exact boolean and preflight the capability', async (t) => {
+  const requests = [];
+  const client = await fakeClient(t, (request) => {
+    requests.push({ command: request.command, params: request.params });
+    return request.command === 'hello'
+      ? { protocolVersion: 1, capabilities: ['memoryScanAllocationMetadata'] }
+      : request.params.includeAllocationMetadata
+        ? VALID_ALLOCATION_SCAN_RESULT
+        : VALID_SCAN_RESULT;
+  });
+  const options = { ...VALID_SCAN_OPTIONS, includeAllocationMetadata: true };
+  const pending = client.scanMemoryPage(options);
+  options.includeAllocationMetadata = false;
+  assert.deepEqual(await pending, VALID_ALLOCATION_SCAN_RESULT);
+  assert.deepEqual(requests, [
+    { command: 'hello', params: {} },
+    { command: 'scanMemory', params: {
+      ...VALID_SCAN_OPTIONS,
+      includeAllocationMetadata: true,
+    } },
+  ]);
+
+  requests.length = 0;
+  assert.deepEqual(
+    await client.scanMemoryPage({ ...VALID_SCAN_OPTIONS, includeAllocationMetadata: false }),
+    VALID_SCAN_RESULT,
+  );
+  assert.deepEqual(requests, [{ command: 'scanMemory', params: {
+    ...VALID_SCAN_OPTIONS,
+    includeAllocationMetadata: false,
+  } }]);
+});
+
+test('opt-in allocation scans fail closed when the capability is absent', async (t) => {
+  const commands = [];
+  const client = await fakeClient(t, (request) => {
+    commands.push(request.command);
+    return { protocolVersion: 1, capabilities: ['memoryScan'] };
+  });
+  await assert.rejects(
+    client.scanMemoryPage({ ...VALID_SCAN_OPTIONS, includeAllocationMetadata: true }),
+    (error) => error.code === 'PROTOCOL_MISMATCH' &&
+      error.message === 'Host does not advertise memoryScanAllocationMetadata capability',
+  );
+  assert.deepEqual(commands, ['hello']);
+});
+
+test('aggregate allocation scans preflight once and preserve extended matches', async (t) => {
+  const commands = [];
+  const client = await fakeClient(t, (request) => {
+    commands.push(request.command);
+    return request.command === 'hello'
+      ? { protocolVersion: 1, capabilities: ['memoryScanAllocationMetadata'] }
+      : VALID_ALLOCATION_SCAN_RESULT;
+  });
+  assert.deepEqual(
+    await client.scanMemory({
+      ...VALID_SCAN_OPTIONS,
+      includeAllocationMetadata: true,
+      maxPages: 1,
+    }),
+    {
+      supportedBuild: true,
+      complete: true,
+      scannedBytes: 65536,
+      matches: VALID_ALLOCATION_SCAN_RESULT.matches,
+    },
+  );
+  assert.deepEqual(commands, ['hello', 'scanMemory']);
+});
+
+test('opt-in allocation scans reject hostile metadata shapes and arithmetic', async (t) => {
+  const validMatch = VALID_ALLOCATION_SCAN_RESULT.matches[0];
+  const { allocationBase, ...missingBase } = validMatch;
+  const invalidMatches = [
+    missingBase,
+    { ...validMatch, extra: true },
+    { ...validMatch, allocationBase: '0x7ff612340000' },
+    { ...validMatch, allocationSize: Number.MAX_SAFE_INTEGER + 1 },
+    { ...validMatch, offsetInAllocation: validMatch.allocationSize },
+    { ...validMatch, offsetInAllocation: 127 },
+  ];
+  let index = 0;
+  const client = await fakeClient(t, (request) => request.command === 'hello'
+    ? { protocolVersion: 1, capabilities: ['memoryScanAllocationMetadata'] }
+    : { ...VALID_ALLOCATION_SCAN_RESULT, matches: [invalidMatches[index++]] });
+  for (const ignored of invalidMatches) {
+    await assert.rejects(
+      client.scanMemoryPage({ ...VALID_SCAN_OPTIONS, includeAllocationMetadata: true }),
+      (error) => error.code === 'INVALID_RESPONSE',
+    );
+  }
+});
+
 test('memory APIs reject invalid requests before creating a socket', async () => {
   const originalCreateConnection = net.createConnection;
   let socketCreations = 0;
@@ -587,6 +692,7 @@ test('memory APIs reject invalid requests before creating a socket', async () =>
       { ...VALID_SCAN_OPTIONS, maxMatches: Number.MAX_SAFE_INTEGER + 1 },
       { ...VALID_SCAN_OPTIONS, contextBefore: 256, contextAfter: 257 },
       { ...VALID_SCAN_OPTIONS, allowUnsupportedBuild: 'true' },
+      { ...VALID_SCAN_OPTIONS, includeAllocationMetadata: 1 },
       { ...VALID_SCAN_OPTIONS, cursor: '0xabcdef' },
       { ...VALID_SCAN_OPTIONS, cursor: 4096 },
     ];

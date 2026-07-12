@@ -39,6 +39,40 @@ class Allocation {
   void* address_{};
 };
 
+class TopologyAllocation {
+ public:
+  TopologyAllocation() {
+    SYSTEM_INFO system_info{};
+    GetSystemInfo(&system_info);
+    page_size_ = static_cast<std::size_t>(system_info.dwPageSize);
+    address_ = static_cast<std::uint8_t*>(
+        VirtualAlloc(nullptr, page_size_ * 3, MEM_RESERVE, PAGE_READWRITE));
+    if (!address_) return;
+    for (std::size_t page = 0; page < 3; ++page) {
+      if (VirtualAlloc(address_ + page * page_size_, page_size_, MEM_COMMIT,
+                       PAGE_READWRITE) != address_ + page * page_size_) return;
+    }
+    DWORD prior{};
+    if (!VirtualProtect(address_, page_size_, PAGE_READONLY, &prior) ||
+        !VirtualProtect(address_ + page_size_ * 2, page_size_, PAGE_EXECUTE_READ,
+                        &prior)) return;
+    valid_ = true;
+  }
+  ~TopologyAllocation() {
+    if (address_) VirtualFree(address_, 0, MEM_RELEASE);
+  }
+  TopologyAllocation(const TopologyAllocation&) = delete;
+  TopologyAllocation& operator=(const TopologyAllocation&) = delete;
+  bool valid() const { return valid_; }
+  std::uint8_t* get() const { return address_; }
+  std::size_t page_size() const { return page_size_; }
+
+ private:
+  std::uint8_t* address_{};
+  std::size_t page_size_{};
+  bool valid_{};
+};
+
 std::string FormatAddress(std::uintptr_t address) {
   std::ostringstream out;
   out << "0x" << std::uppercase << std::hex << address;
@@ -212,10 +246,23 @@ int wmain(int argc, wchar_t** argv) {
   transaction_two_bytes[1] = 0x40;
 
   if (argc != 2 || !LoadLibraryW(argv[1])) return 2;
-  Allocation allocation(64 * 1024);
-  if (!allocation.get()) return 23;
-  auto* sentinel_address = static_cast<std::uint8_t*>(allocation.get()) + 128;
+  TopologyAllocation allocation;
+  if (!allocation.valid()) return 23;
+  auto* sentinel_address = allocation.get() + allocation.page_size() + 128;
   std::memcpy(sentinel_address, kSentinel.data(), kSentinel.size());
+  MEMORY_BASIC_INFORMATION first_info{};
+  MEMORY_BASIC_INFORMATION middle_info{};
+  MEMORY_BASIC_INFORMATION final_info{};
+  if (VirtualQuery(allocation.get(), &first_info, sizeof(first_info)) != sizeof(first_info) ||
+      VirtualQuery(allocation.get() + allocation.page_size(), &middle_info,
+                   sizeof(middle_info)) != sizeof(middle_info) ||
+      VirtualQuery(allocation.get() + allocation.page_size() * 2, &final_info,
+                   sizeof(final_info)) != sizeof(final_info) ||
+      first_info.AllocationBase != allocation.get() ||
+      middle_info.AllocationBase != allocation.get() ||
+      final_info.AllocationBase != allocation.get() ||
+      first_info.BaseAddress == middle_info.BaseAddress ||
+      middle_info.BaseAddress == final_info.BaseAddress) return 105;
   const std::wstring pipe = L"\\\\.\\pipe\\CFB27LuaHost.v1." +
       std::to_wstring(GetCurrentProcessId());
   const std::wstring legacy_pipe = L"\\\\.\\pipe\\CFB27LuaHost." +
@@ -227,6 +274,8 @@ int wmain(int argc, wchar_t** argv) {
   const auto capabilities = response["result"]["capabilities"];
   if (std::find(capabilities.begin(), capabilities.end(), "evaluate") == capabilities.end()) return 5;
   if (std::find(capabilities.begin(), capabilities.end(), "telemetry") == capabilities.end()) return 51;
+  if (std::find(capabilities.begin(), capabilities.end(),
+                "memoryScanAllocationMetadata") == capabilities.end()) return 106;
 
   if (!Request(pipe, {{"protocol", 1}, {"id", "status-1"},
                       {"command", "status"}, {"params", Json::object()}}, response, false)) return 14;
@@ -495,6 +544,37 @@ int wmain(int argc, wchar_t** argv) {
       match.value("contextHex", "") != std::string("00000000") + kSentinelHex + "00000000") return 30;
   allowed_scan_params.erase("cursor");
 
+  Json false_metadata_params = allowed_scan_params;
+  false_metadata_params["cursor"] = FormatAddress(
+      reinterpret_cast<std::uintptr_t>(allocation.get()));
+  false_metadata_params["includeAllocationMetadata"] = false;
+  if (!Request(pipe, {{"protocol", 1}, {"id", "scan-allocation-false"},
+                      {"command", "scanMemory"}, {"params", false_metadata_params}},
+               response, false) || !response.value("ok", false) ||
+      response["result"]["matches"].size() != 1 ||
+      response["result"]["matches"][0].size() != 6) return 107;
+
+  Json metadata_params = false_metadata_params;
+  metadata_params["includeAllocationMetadata"] = true;
+  if (!Request(pipe, {{"protocol", 1}, {"id", "scan-allocation-true"},
+                      {"command", "scanMemory"}, {"params", metadata_params}},
+               response, false) || !response.value("ok", false) ||
+      response["result"]["matches"].size() != 1) return 108;
+  const auto& allocation_match = response["result"]["matches"][0];
+  if (allocation_match.size() != 10 ||
+      allocation_match.value("allocationBase", "") !=
+          FormatAddress(reinterpret_cast<std::uintptr_t>(allocation.get())) ||
+      allocation_match.value("allocationSize", 0ull) != allocation.page_size() * 3 ||
+      allocation_match.value("allocationProtect", 0u) != PAGE_READWRITE ||
+      allocation_match.value("offsetInAllocation", 0ull) !=
+          allocation.page_size() + 128) return 109;
+
+  Json invalid_metadata_params = allowed_scan_params;
+  invalid_metadata_params["includeAllocationMetadata"] = 1;
+  if (!Request(pipe, {{"protocol", 1}, {"id", "scan-allocation-invalid"},
+                      {"command", "scanMemory"}, {"params", invalid_metadata_params}},
+               response, false) || !IsError(response, "INVALID_REQUEST")) return 110;
+
   const auto address = FormatAddress(reinterpret_cast<std::uintptr_t>(sentinel_address));
   const Json read_params{
       {"allowUnsupportedBuild", true},
@@ -632,7 +712,7 @@ int wmain(int argc, wchar_t** argv) {
       !IsError(response, "MEMORY_ACCESS_DENIED") ||
       !response["error"].value("details", Json::object()).empty()) return 45;
 
-  std::memcpy(static_cast<std::uint8_t*>(allocation.get()) + 256,
+  std::memcpy(sentinel_address + 128,
               kSentinel.data(), kSentinel.size());
   Json crowded_scan_params = allowed_scan_params;
   crowded_scan_params["maxMatches"] = 1;
@@ -640,7 +720,7 @@ int wmain(int argc, wchar_t** argv) {
                       {"command", "scanMemory"}, {"params", crowded_scan_params}}, response, false) ||
       !IsError(response, "TOO_MANY_MATCHES") ||
       !response["error"].value("details", Json::object()).empty()) return 46;
-  SecureZeroMemory(static_cast<std::uint8_t*>(allocation.get()) + 256, kSentinel.size());
+  SecureZeroMemory(sentinel_address + 128, kSentinel.size());
 
   if (!Request(pipe, {{"protocol", 1}, {"id", "emit-unregistered"},
                       {"command", "evaluate"},

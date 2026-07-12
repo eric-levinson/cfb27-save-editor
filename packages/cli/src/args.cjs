@@ -45,6 +45,7 @@ function parseArgs(argv) {
     context: undefined,
     ranges: [],
     allowUnsupportedBuild: false,
+    includeAllocationMetadata: false,
     allowExternalFile: false,
   };
   const seen = new Set();
@@ -76,12 +77,16 @@ function parseArgs(argv) {
       continue;
     }
     if (token === '--json' || token === '--follow' || token === '--allow-unsupported-build' ||
+        token === '--include-allocation-metadata' ||
         token === '--allow-external-file') {
       if (seen.has(token)) throw usageError(`Duplicate option: ${token}`);
       seen.add(token);
       if (token === '--json') json = true;
       else if (token === '--follow') options.follow = true;
       else if (token === '--allow-unsupported-build') options.allowUnsupportedBuild = true;
+      else if (token === '--include-allocation-metadata') {
+        options.includeAllocationMetadata = true;
+      }
       else options.allowExternalFile = true;
       continue;
     }

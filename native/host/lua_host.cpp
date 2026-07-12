@@ -964,7 +964,8 @@ cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
         {"supportedBuild", supported},
         {"writesAllowed", writes_allowed},
         {"capabilities", {"status", "runScript", "evaluate", "logs", "events",
-                          "memoryScan", "memoryRead", "memoryWriteTransaction",
+                          "memoryScan", "memoryScanAllocationMetadata", "memoryRead",
+                          "memoryWriteTransaction",
                           "telemetry"}},
     });
   }
@@ -1097,6 +1098,11 @@ cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
       return ErrorResponse(id, "INVALID_REQUEST",
                            "allowUnsupportedBuild must be a boolean");
     }
+    if (params.contains("includeAllocationMetadata") &&
+        !params["includeAllocationMetadata"].is_boolean()) {
+      return ErrorResponse(id, "INVALID_REQUEST",
+                           "includeAllocationMetadata must be a boolean");
+    }
     const bool allow_unsupported = params.contains("allowUnsupportedBuild") &&
         params["allowUnsupportedBuild"].get<bool>();
     if (!supported && !allow_unsupported) {
@@ -1104,7 +1110,8 @@ cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
                            "Memory scanning requires a supported build or explicit override");
     }
     if (!HasOnlyKeys(params, {"patternHex", "maskHex", "maxMatches", "contextBefore",
-                              "contextAfter", "allowUnsupportedBuild", "cursor"}) ||
+                              "contextAfter", "allowUnsupportedBuild", "cursor",
+                              "includeAllocationMetadata"}) ||
         !params.contains("patternHex") || !params.contains("maskHex")) {
       return ErrorResponse(id, "INVALID_REQUEST", "Invalid scanMemory params");
     }
@@ -1147,6 +1154,8 @@ cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
         .context_before = *context_before,
         .context_after = *context_after,
         .cursor = std::move(cursor),
+        .include_allocation_metadata =
+            params.value("includeAllocationMetadata", false),
     });
     if (!scan.code.empty()) return MemoryError(id, scan.code);
 
@@ -1158,14 +1167,28 @@ cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
       if (!address || !region_base || !context_address) {
         return ErrorResponse(id, "MEMORY_ACCESS_DENIED", "Memory scan returned an invalid address");
       }
-      matches.push_back({
+      Json response_match{
           {"address", FormatCanonicalAddress(*address)},
           {"regionBase", FormatCanonicalAddress(*region_base)},
           {"regionSize", match.region_size},
           {"protection", match.protection},
           {"contextAddress", FormatCanonicalAddress(*context_address)},
           {"contextHex", BytesToHex(match.context.bytes())},
-      });
+      };
+      if (match.allocation) {
+        const auto allocation_base =
+            cfb27::memory::ParseAddress(match.allocation->base);
+        if (!allocation_base) {
+          return ErrorResponse(id, "MEMORY_ACCESS_DENIED",
+                               "Memory scan returned an invalid allocation address");
+        }
+        response_match["allocationBase"] =
+            FormatCanonicalAddress(*allocation_base);
+        response_match["allocationSize"] = match.allocation->size;
+        response_match["allocationProtect"] = match.allocation->protection;
+        response_match["offsetInAllocation"] = match.allocation->offset;
+      }
+      matches.push_back(std::move(response_match));
     }
     return SuccessResponse(id, {
         {"supportedBuild", supported},

@@ -175,6 +175,10 @@ test('memory scan parses diagnostic options and preserves the validated SDK resu
       protection: 4,
       contextAddress: '0x7FF612340060',
       contextHex: `${'00'.repeat(32)}CFB27A1100A1B2C3D4E5F60718293A4B${'00'.repeat(32)}`,
+      allocationBase: '0x7FF612300000',
+      allocationSize: 4194304,
+      allocationProtect: 4,
+      offsetInAllocation: 262272,
     }],
   };
   const calls = [];
@@ -197,6 +201,7 @@ test('memory scan parses diagnostic options and preserves the validated SDK resu
     '--context', '32',
     '--max-pages', '3',
     '--allow-unsupported-build',
+    '--include-allocation-metadata',
     '--json',
   ], { sdk, io }), 0);
   assert.deepEqual(calls, [
@@ -209,6 +214,7 @@ test('memory scan parses diagnostic options and preserves the validated SDK resu
       contextAfter: 32,
       maxPages: 3,
       allowUnsupportedBuild: true,
+      includeAllocationMetadata: true,
     }],
   ]);
   assert.deepEqual(JSON.parse(output.stdout), {

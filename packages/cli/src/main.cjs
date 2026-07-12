@@ -53,6 +53,8 @@ Options:
   --range <address:length> Canonical read range; may be repeated
   --allow-unsupported-build
                           Explicitly allow unsupported-build diagnostics
+  --include-allocation-metadata
+                          Include session-only allocation topology in scan matches
   --allow-external-file   Allow a transaction JSON file outside the current directory
   -h, --help              Show this help`;
 
@@ -89,6 +91,7 @@ function requireMemoryScanOptions(options) {
     contextAfter: options.context,
     maxPages: options.maxPages || 4096,
     ...(options.allowUnsupportedBuild ? { allowUnsupportedBuild: true } : {}),
+    ...(options.includeAllocationMetadata ? { includeAllocationMetadata: true } : {}),
   };
 }
 
@@ -96,6 +99,7 @@ function rejectMisplacedDeveloperOptions(command, positionals, options) {
   const operation = command === 'memory' ? positionals[0] : undefined;
   const scanOptions = [
     options.pattern, options.mask, options.maxMatches, options.maxPages, options.context,
+    options.includeAllocationMetadata || undefined,
   ];
   if (command !== 'memory' && (scanOptions.some((value) => value !== undefined) ||
       options.ranges.length || options.allowUnsupportedBuild)) {

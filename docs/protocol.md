@@ -40,16 +40,18 @@ Error response:
 - `registerTelemetry { types }` — add trusted structured event names for the
   current host session.
 - `scanMemory { patternHex, maskHex, maxMatches, contextBefore,
-  contextAfter, allowUnsupportedBuild?, cursor? }` — scan one bounded page of
-  readable private memory and optionally resume from a continuation cursor.
+  contextAfter, allowUnsupportedBuild?, cursor?, includeAllocationMetadata? }`
+  — scan one bounded page of readable private memory and optionally resume from
+  a continuation cursor.
 - `readMemory { ranges, allowUnsupportedBuild? }` — read a bounded batch of
   readable private-memory ranges.
 - `writeTransaction { transactionId, operations }` — apply a bounded guarded
   batch with complete preflight comparison, readback, and rollback.
 
 `hello.capabilities` advertises the memory commands as `memoryScan` and
-`memoryRead`, guarded writes as `memoryWriteTransaction`, and structured event
-registration as `telemetry`. `status.sessionWritesDisabled` reports whether an
+`memoryRead`, allocation-aware scans as `memoryScanAllocationMetadata`, guarded
+writes as `memoryWriteTransaction`, and structured event registration as
+`telemetry`. `status.sessionWritesDisabled` reports whether an
 unverifiable rollback has permanently disabled writes for the current host
 session.
 
@@ -108,6 +110,24 @@ Result:
 {"supportedBuild":false,"complete":false,"nextCursor":"0x7FF614340000","scannedBytes":33554432,"matches":[{"address":"0x7FF612340080","regionBase":"0x7FF612340000","regionSize":65536,"protection":4,"contextAddress":"0x7FF61234007C","contextHex":"00000000CFB27A1100A1B2C3D4E5F60718293A4B00000000"}]}
 ```
 
+When `includeAllocationMetadata` is absent or the JSON boolean `false`, each
+match has exactly the six legacy properties shown above. When it is `true`, the
+host adds exactly four properties to every match:
+
+```json
+{"address":"0x7FF612340080","regionBase":"0x7FF612340000","regionSize":4096,"protection":4,"contextAddress":"0x7FF61234007C","contextHex":"00000000CFB27A1100A1B2C3D4E5F60718293A4B00000000","allocationBase":"0x7FF612300000","allocationSize":4194304,"allocationProtect":4,"offsetInAllocation":262272}
+```
+
+`allocationBase` is the allocation identity reported by the operating system.
+`allocationSize` is the checked contiguous extent of adjacent virtual-memory
+regions that retain that identity. `allocationProtect` is the allocation's
+initial protection, while `protection` remains the current protection of the
+matched region. `offsetInAllocation` is the checked byte difference from the
+allocation base, and therefore
+`BigInt(address) === BigInt(allocationBase) + BigInt(offsetInAllocation)`.
+Failure to discover a complete consistent extent fails the whole page with
+`MEMORY_ACCESS_DENIED`; partial matches are not returned.
+
 Every successful page contains exactly `complete`, `nextCursor`,
 `scannedBytes`, `matches`, and `supportedBuild`. A partial page has
 `complete:false` and a canonical string `nextCursor`; a terminal page has
@@ -123,6 +143,15 @@ owns continuation cursors, accepts `maxPages` from 1 through 4,096 (default
 cursors. The default bounds total eligible-byte work to 128 GiB. Before using a
 candidate for interpretation, re-read it and validate its expected structure;
 the live memory map can change between pages.
+
+Before an opt-in request, the SDK negotiates `hello` and requires
+`memoryScanAllocationMetadata`; older hosts fail closed with
+`PROTOCOL_MISMATCH`. Allocation addresses and topology are opaque, session-only
+observations. They must not be persisted or reused after a PID, host session,
+allocation lifecycle, or validation change. Allocation size and address order
+are never authority signals: use independently validated content and lifecycle
+behavior to distinguish authoritative state from replicas, caches, or stale
+allocations.
 
 ### Memory read
 

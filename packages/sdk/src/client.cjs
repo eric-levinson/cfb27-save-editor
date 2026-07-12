@@ -96,7 +96,7 @@ function cloneUpperHex(value, minimumBytes, maximumBytes, fieldName) {
 
 function cloneScanPageOptions(options) {
   const keys = ['patternHex', 'maskHex', 'maxMatches', 'contextBefore', 'contextAfter',
-    'allowUnsupportedBuild', 'cursor'];
+    'allowUnsupportedBuild', 'cursor', 'includeAllocationMetadata'];
   if (!hasOnlyKeys(options, keys)) throw invalidRequest('scanMemory options are invalid');
   const patternHex = cloneUpperHex(
     options.patternHex,
@@ -126,6 +126,10 @@ function cloneScanPageOptions(options) {
   if (Object.hasOwn(options, 'cursor') && !isCanonicalAddress(options.cursor)) {
     throw invalidRequest('cursor must be a canonical uppercase address');
   }
+  if (Object.hasOwn(options, 'includeAllocationMetadata') &&
+      typeof options.includeAllocationMetadata !== 'boolean') {
+    throw invalidRequest('includeAllocationMetadata must be a boolean');
+  }
 
   const clone = {
     patternHex,
@@ -138,12 +142,16 @@ function cloneScanPageOptions(options) {
     clone.allowUnsupportedBuild = options.allowUnsupportedBuild;
   }
   if (Object.hasOwn(options, 'cursor')) clone.cursor = options.cursor;
+  if (Object.hasOwn(options, 'includeAllocationMetadata')) {
+    clone.includeAllocationMetadata = options.includeAllocationMetadata;
+  }
   return clone;
 }
 
 function cloneAggregateScanOptions(options) {
   if (!hasOnlyKeys(options, ['patternHex', 'maskHex', 'maxMatches', 'contextBefore',
-    'contextAfter', 'allowUnsupportedBuild', 'maxPages']) || Object.hasOwn(options, 'cursor')) {
+    'contextAfter', 'allowUnsupportedBuild', 'includeAllocationMetadata', 'maxPages']) ||
+      Object.hasOwn(options, 'cursor')) {
     throw invalidRequest('scanMemory aggregate options are invalid');
   }
   const maxPages = Object.hasOwn(options, 'maxPages') ? options.maxPages : MEMORY_LIMITS.maxPages;
@@ -203,8 +211,11 @@ function validateScanPageResult(result, params) {
   const maximumContextBytes = params.patternHex.length / 2 +
     params.contextBefore + params.contextAfter;
   for (const match of result.matches) {
-    if (!hasExactKeys(match, ['address', 'regionBase', 'regionSize', 'protection',
-      'contextAddress', 'contextHex']) ||
+    const matchKeys = params.includeAllocationMetadata === true
+      ? ['address', 'regionBase', 'regionSize', 'protection', 'contextAddress', 'contextHex',
+        'allocationBase', 'allocationSize', 'allocationProtect', 'offsetInAllocation']
+      : ['address', 'regionBase', 'regionSize', 'protection', 'contextAddress', 'contextHex'];
+    if (!hasExactKeys(match, matchKeys) ||
         !isCanonicalAddress(match.address) || !isCanonicalAddress(match.regionBase) ||
         !isSafeIntegerBetween(match.regionSize, 1, Number.MAX_SAFE_INTEGER) ||
         !isSafeIntegerBetween(match.protection, 0, 0xFFFFFFFF) ||
@@ -214,7 +225,15 @@ function validateScanPageResult(result, params) {
           match.contextHex.length / 2,
           params.patternHex.length / 2,
           maximumContextBytes,
-        )) {
+        ) ||
+        (params.includeAllocationMetadata === true &&
+          (!isCanonicalAddress(match.allocationBase) ||
+           !isSafeIntegerBetween(match.allocationSize, 1, Number.MAX_SAFE_INTEGER) ||
+           !isSafeIntegerBetween(match.allocationProtect, 0, 0xFFFFFFFF) ||
+           !isSafeIntegerBetween(match.offsetInAllocation, 0,
+             match.allocationSize - 1) ||
+           BigInt(match.address) !==
+             BigInt(match.allocationBase) + BigInt(match.offsetInAllocation)))) {
       throw invalidResponse('Host returned an invalid scanMemory match');
     }
   }
@@ -521,6 +540,18 @@ function createClient({ pid, pipeName, timeoutMs = 3000 } = {}) {
     });
   }
 
+  async function requireAllocationMetadataCapability() {
+    const hello = await request('hello');
+    if (!hello || hello.protocolVersion !== 1 ||
+        !Array.isArray(hello.capabilities) ||
+        !hello.capabilities.includes('memoryScanAllocationMetadata')) {
+      throw new Cfb27HookError(
+        'PROTOCOL_MISMATCH',
+        'Host does not advertise memoryScanAllocationMetadata capability',
+      );
+    }
+  }
+
   return Object.freeze({
     request,
     async hello() {
@@ -547,10 +578,16 @@ function createClient({ pid, pipeName, timeoutMs = 3000 } = {}) {
     },
     async scanMemoryPage(options = {}) {
       const params = cloneScanPageOptions(options);
+      if (params.includeAllocationMetadata === true) {
+        await requireAllocationMetadataCapability();
+      }
       return validateScanPageResult(await request('scanMemory', params), params);
     },
     async scanMemory(options = {}) {
       const { pageOptions, maxPages } = cloneAggregateScanOptions(options);
+      if (pageOptions.includeAllocationMetadata === true) {
+        await requireAllocationMetadataCapability();
+      }
       const matches = [];
       const cursors = new Set();
       let cursor;

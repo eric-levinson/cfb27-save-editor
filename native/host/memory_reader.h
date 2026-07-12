@@ -86,10 +86,21 @@ struct ScanRequest {
   std::size_t context_before{};
   std::size_t context_after{};
   std::optional<std::string> cursor;
+  bool include_allocation_metadata{};
 };
 
 using ScanReadFunction = bool (*)(const void* source, void* destination,
                                   std::size_t length, std::size_t& copied);
+using ScanQueryFunction = SIZE_T (*)(const void* address,
+                                     MEMORY_BASIC_INFORMATION* information,
+                                     SIZE_T length);
+
+struct AllocationMetadata {
+  std::string base;
+  std::size_t size{};
+  DWORD protection{};
+  std::size_t offset{};
+};
 
 struct ScanMatch {
   std::string address;
@@ -98,6 +109,7 @@ struct ScanMatch {
   DWORD protection{};
   std::string context_address;
   MappedBytes context;
+  std::optional<AllocationMetadata> allocation;
 };
 
 struct ScanResult {
@@ -113,6 +125,7 @@ std::string FormatAddress(std::uintptr_t address);
 bool IsEligiblePrivateReadableRegion(const MEMORY_BASIC_INFORMATION& info);
 BatchReadResult ReadMemoryBatch(const std::vector<ReadRange>& ranges);
 ScanResult ScanPrivateMemory(const ScanRequest& request,
-                             ScanReadFunction read = nullptr);
+                             ScanReadFunction read = nullptr,
+                             ScanQueryFunction query = nullptr);
 
 }  // namespace cfb27::memory
