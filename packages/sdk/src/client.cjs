@@ -7,6 +7,13 @@ const path = require('node:path');
 const { Cfb27HookError } = require('./errors.cjs');
 const { encodeFrame, FrameDecoder } = require('./frame.cjs');
 const { discoverGame } = require('./process.cjs');
+const {
+  isObject,
+  hasExactKeys,
+  hasOnlyKeys,
+  isSafeIntegerBetween,
+  isUpperHexBytes,
+} = require('./validation.cjs');
 
 const MEMORY_LIMITS = Object.freeze({
   minPatternBytes: 8,
@@ -21,7 +28,6 @@ const MEMORY_LIMITS = Object.freeze({
 });
 
 const CANONICAL_ADDRESS = /^0x(?:0|[1-9A-F][0-9A-F]{0,15})$/;
-const UPPER_HEX_BYTES = /^(?:[0-9A-F]{2})+$/;
 const TELEMETRY_TYPE = /^[a-z][a-z0-9_.-]{0,63}$/;
 const TRANSACTION_ID = /^[A-Za-z0-9._-]{1,64}$/;
 const RESERVED_TELEMETRY_TYPES = new Set(['game_ready', 'tick', 'log']);
@@ -60,31 +66,12 @@ function invalidResponse(message) {
   return new Cfb27HookError('INVALID_RESPONSE', message);
 }
 
-function isObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function hasExactKeys(value, keys) {
-  if (!isObject(value)) return false;
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
-function hasOnlyKeys(value, keys) {
-  return isObject(value) && Object.keys(value).every((key) => keys.includes(key));
-}
-
-function isSafeIntegerBetween(value, minimum, maximum) {
-  return Number.isSafeInteger(value) && value >= minimum && value <= maximum;
-}
-
 function isCanonicalAddress(value) {
   return typeof value === 'string' && CANONICAL_ADDRESS.test(value);
 }
 
 function cloneUpperHex(value, minimumBytes, maximumBytes, fieldName) {
-  if (typeof value !== 'string' || !UPPER_HEX_BYTES.test(value)) {
+  if (!isUpperHexBytes(value)) {
     throw invalidRequest(`${fieldName} must contain uppercase hexadecimal bytes`);
   }
   const byteLength = value.length / 2;
@@ -220,7 +207,7 @@ function validateScanPageResult(result, params) {
         !isSafeIntegerBetween(match.regionSize, 1, Number.MAX_SAFE_INTEGER) ||
         !isSafeIntegerBetween(match.protection, 0, 0xFFFFFFFF) ||
         !isCanonicalAddress(match.contextAddress) ||
-        typeof match.contextHex !== 'string' || !UPPER_HEX_BYTES.test(match.contextHex) ||
+        !isUpperHexBytes(match.contextHex) ||
         !isSafeIntegerBetween(
           match.contextHex.length / 2,
           params.patternHex.length / 2,
@@ -256,7 +243,7 @@ function validateReadResult(result, params) {
     if (!hasExactKeys(range, ['address', 'length', 'bytesHex']) ||
         !isCanonicalAddress(range.address) || range.address !== requested.address ||
         range.length !== requested.length ||
-        typeof range.bytesHex !== 'string' || !UPPER_HEX_BYTES.test(range.bytesHex) ||
+        !isUpperHexBytes(range.bytesHex) ||
         range.bytesHex.length !== range.length * 2) {
       throw invalidResponse('Host returned an invalid readMemory range');
     }
