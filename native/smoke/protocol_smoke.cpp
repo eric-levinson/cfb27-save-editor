@@ -257,9 +257,6 @@ Json SyntheticBundle(std::span<const std::uint8_t> records,
                {"schemaIdentity", "synthetic-protocol-v1"},
                {"buildIdentity", std::move(build_identity)},
                {"tables", Json::array({table})}};
-  auto hash_content = profile;
-  hash_content.erase("profileId");
-  profile["profileId"] = Sha256(hash_content.dump());
   Json layout_table{{"logicalName", "SyntheticRecords"}, {"tableId", 1200},
                     {"uniqueId", 900001}, {"capacity", 3}, {"recordSize", 16},
                     {"authorityStatus", std::move(authority)},
@@ -309,6 +306,10 @@ Json SyntheticBundle(std::span<const std::uint8_t> records,
               {"schemaIdentity", "synthetic-protocol-v1"},
               {"buildIdentity", profile["buildIdentity"]},
               {"tables", Json::array({layout_table})}};
+  auto profile_without_id = profile;
+  profile_without_id.erase("profileId");
+  profile["profileId"] = Sha256(
+      Json{{"profile", std::move(profile_without_id)}, {"layout", layout}}.dump());
   return {{"profile", std::move(profile)}, {"layout", std::move(layout)}};
 }
 

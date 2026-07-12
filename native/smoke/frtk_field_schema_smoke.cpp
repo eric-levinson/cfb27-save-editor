@@ -84,7 +84,10 @@ FieldDefinition Definition(std::string encoding, std::uint32_t byte_offset,
 void TestSchemaRegistry() {
   cfb27::frtk::SchemaRegistry registry;
   std::string error;
-  Require(registry.Load(ValidLayout(), &error), error.c_str());
+  Require(!registry.Load(ValidLayout(), &error) &&
+              error.find("discovery_only") != std::string::npos,
+          "file layout granted promoted authority");
+  Require(registry.LoadTrustedForTesting(ValidLayout(), &error), error.c_str());
   const auto* table = registry.FindTable(4288);
   Require(table != nullptr && table->authority_status ==
                                    cfb27::frtk::AuthorityStatus::kCommitAdapterRequired,
@@ -97,37 +100,37 @@ void TestSchemaRegistry() {
 
   auto extra = ValidLayout();
   extra["tables"][0]["fields"][0]["surprise"] = true;
-  Require(!registry.Load(extra, &error), "field extra key accepted");
+  Require(!registry.LoadTrustedForTesting(extra, &error), "field extra key accepted");
   auto duplicate = ValidLayout();
   duplicate["tables"][1]["fields"].push_back(
       duplicate["tables"][1]["fields"][0]);
-  Require(!registry.Load(duplicate, &error), "duplicate field name accepted");
+  Require(!registry.LoadTrustedForTesting(duplicate, &error), "duplicate field name accepted");
   auto duplicate_unique_id = ValidLayout();
   duplicate_unique_id["tables"][1]["uniqueId"] =
       duplicate_unique_id["tables"][0]["uniqueId"];
-  Require(!registry.Load(duplicate_unique_id, &error) &&
+  Require(!registry.LoadTrustedForTesting(duplicate_unique_id, &error) &&
               error.find("Duplicate unique ID in layout") != std::string::npos,
           "duplicate layout unique ID accepted");
   Require(registry.FindTable(4288) != nullptr,
           "failed layout load replaced the previous registry");
   auto unknown_ref = ValidLayout();
   unknown_ref["tables"][1]["fields"][0]["referenceTableId"] = 9999;
-  Require(!registry.Load(unknown_ref, &error), "unknown reference table accepted");
+  Require(!registry.LoadTrustedForTesting(unknown_ref, &error), "unknown reference table accepted");
   auto unsupported = ValidLayout();
   unsupported["tables"][1]["fields"][1]["encoding"] = "float";
-  Require(!registry.Load(unsupported, &error), "unsupported encoding accepted");
+  Require(!registry.LoadTrustedForTesting(unsupported, &error), "unsupported encoding accepted");
   auto authority = ValidLayout();
   authority["tables"][0]["authorityStatus"] = "verified-ish";
-  Require(!registry.Load(authority, &error), "unknown authority accepted");
+  Require(!registry.LoadTrustedForTesting(authority, &error), "unknown authority accepted");
   auto table_order = ValidLayout();
   std::swap(table_order["tables"][0], table_order["tables"][1]);
-  Require(!registry.Load(table_order, &error) &&
+  Require(!registry.LoadTrustedForTesting(table_order, &error) &&
               error.find("table order") != std::string::npos,
           "noncanonical layout table order accepted");
   auto field_order = ValidLayout();
   auto& fields = field_order["tables"][1]["fields"];
   std::swap(fields[0], fields[1]);
-  Require(!registry.Load(field_order, &error) &&
+  Require(!registry.LoadTrustedForTesting(field_order, &error) &&
               error.find("field order") != std::string::npos,
           "noncanonical field order accepted");
   auto mixed_case = ValidLayout();
@@ -135,11 +138,11 @@ void TestSchemaRegistry() {
       Field("Beta", "bitfield", 4, 1, 0, 2, 0, 3),
       Field("alpha", "bitfield", 4, 1, 0, 2, 0, 3),
   });
-  Require(registry.Load(mixed_case, &error),
+  Require(registry.LoadTrustedForTesting(mixed_case, &error),
           "bytewise mixed-case field order rejected");
   std::swap(mixed_case["tables"][1]["fields"][0],
             mixed_case["tables"][1]["fields"][1]);
-  Require(!registry.Load(mixed_case, &error) &&
+  Require(!registry.LoadTrustedForTesting(mixed_case, &error) &&
               error.find("field order") != std::string::npos,
           "locale-style mixed-case field order accepted");
 }

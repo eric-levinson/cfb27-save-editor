@@ -7,6 +7,10 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const version = '0.2.0-dev.2';
+const SYNTHETIC_PROCESS_ADDRESSES = new Set([
+  '0X7FF612300000', '0X7FF612340000', '0X7FF61234007C',
+  '0X7FF612340080', '0X7FF614340000', '0XFFFFFFFFFFFFFFFF',
+]);
 
 function releaseEntries() {
   return ['native', 'packages', 'examples', 'docs', 'README.md', 'LICENSE'];
@@ -18,7 +22,7 @@ function assertAllowedEntry(entry) {
   const segments = lower.split('/');
   const deniedSegments = new Set([
     'archive', 'node_modules', 'schema', 'save', 'saves', 'backups',
-    'build', 'build-active', '__pycache__', '.requirements',
+    'build', 'build-active', '__pycache__', '.requirements', 'research', 'superpowers',
   ]);
   if (segments.some((segment) => deniedSegments.has(segment)) ||
       /\.(obj|pdb|log|bin|gz|xml|pyc)$/i.test(lower)) {
@@ -40,9 +44,27 @@ function assertAllowedEntry(entry) {
   if (area === 'docs' && !normalized.endsWith('.md')) {
     throw new Error(`Release entry is not allowed: ${entry}`);
   }
+  if (lower === 'docs/development/restructure-pr-body.md') {
+    throw new Error(`Release entry is not allowed: ${entry}`);
+  }
   if (area === 'examples' && !/\.(lua|md)$/i.test(normalized)) {
     throw new Error(`Release entry is not allowed: ${entry}`);
   }
+  return true;
+}
+
+function assertAllowedContent(entry, content) {
+  const text = String(content);
+  for (const match of text.matchAll(/0x[0-9A-F]{9,16}/gi)) {
+    if (!SYNTHETIC_PROCESS_ADDRESSES.has(match[0].toUpperCase())) {
+      throw new Error(`Release text contains a canonical process address: ${entry}`);
+    }
+  }
+  return true;
+}
+
+function assertPackageTextEntries(entries) {
+  for (const entry of entries) assertAllowedContent(entry.path, entry.content);
   return true;
 }
 
@@ -53,6 +75,17 @@ async function walkFiles(directory, relative = '') {
     const child = path.join(relative, entry.name);
     if (entry.isDirectory()) files.push(...await walkFiles(directory, child));
     else if (entry.isFile()) files.push(child);
+  }
+  return files;
+}
+
+async function assertStagedPackage(stage) {
+  const files = await walkFiles(stage);
+  for (const file of files) {
+    assertAllowedEntry(file);
+    if (/\.(md|lua)$/i.test(file) || /^(README\.md|LICENSE)$/i.test(file)) {
+      assertAllowedContent(file, await fs.readFile(path.join(stage, file), 'utf8'));
+    }
   }
   return files;
 }
@@ -96,6 +129,18 @@ async function packWorkspace(workspace, destination, outputName) {
   );
   const result = JSON.parse(stdout);
   if (!Array.isArray(result) || !result[0]?.filename) throw new Error(`npm pack failed for ${workspace}`);
+  const workspaceRoot = path.join(root, workspace);
+  const textEntries = [];
+  for (const entry of result[0].files || []) {
+    if (!/\.(cjs|mjs|js|json|md|lua|ts|txt)$/i.test(entry.path)) continue;
+    const sourcePath = path.resolve(workspaceRoot, entry.path);
+    if (path.relative(workspaceRoot, sourcePath).startsWith('..')) {
+      throw new Error(`Package entry escaped its workspace: ${entry.path}`);
+    }
+    textEntries.push({ path: `${workspace}/${entry.path}`,
+      content: await fs.readFile(sourcePath, 'utf8') });
+  }
+  assertPackageTextEntries(textEntries);
   const source = path.join(destination, result[0].filename);
   const output = path.join(destination, outputName);
   if (source !== output) await fs.rename(source, output);
@@ -138,12 +183,14 @@ async function main({ artifactsDir } = {}) {
 
   await copyTreeIfPresent(path.join(root, 'examples'), path.join(stage, 'examples'));
   await copyTreeIfPresent(path.join(root, 'docs'), path.join(stage, 'docs'));
+  await fs.rm(path.join(stage, 'docs', 'research'), { recursive: true, force: true });
+  await fs.rm(path.join(stage, 'docs', 'superpowers'), { recursive: true, force: true });
+  await fs.rm(path.join(stage, 'docs', 'development', 'restructure-pr-body.md'), { force: true });
   await fs.copyFile(path.join(root, 'README.md'), path.join(stage, 'README.md'));
   await fs.copyFile(path.join(root, 'LICENSE'), path.join(stage, 'LICENSE'));
   await normalizeMtimes(stage);
 
-  const files = await walkFiles(stage);
-  for (const file of files) assertAllowedEntry(file);
+  const files = await assertStagedPackage(stage);
   const checksumLines = [];
   for (const file of files) {
     checksumLines.push(`${await sha256File(path.join(stage, file))}  ${file.replaceAll('\\', '/')}`);
@@ -184,4 +231,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { releaseEntries, assertAllowedEntry, main };
+module.exports = {
+  releaseEntries, assertAllowedEntry, assertAllowedContent, assertPackageTextEntries,
+  assertStagedPackage, main,
+};

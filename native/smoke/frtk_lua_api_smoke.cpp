@@ -54,7 +54,7 @@ ProfileBundle Bundle() {
            {"capacity", 1}, {"recordSize", 8}, {"authorityStatus", "discovery_only"},
            {"fields", nlohmann::json::array({Field("Rank", "unsigned", 0, 2, 0, 16, 65535)})}}
       })}};
-  Require(result.schema.Load(schema, &error), error.c_str());
+  Require(result.schema.LoadTrustedForTesting(schema, &error), error.c_str());
   return result;
 }
 

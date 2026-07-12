@@ -2,7 +2,19 @@
 
 #include <nlohmann/json.hpp>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <bcrypt.h>
+
+#include <array>
+#include <cstdio>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -10,6 +22,50 @@
 namespace {
 
 using nlohmann::json;
+
+std::string Sha256(std::string_view content) {
+  BCRYPT_ALG_HANDLE algorithm = nullptr;
+  BCRYPT_HASH_HANDLE hash = nullptr;
+  DWORD object_size = 0;
+  DWORD received = 0;
+  std::vector<std::uint8_t> object;
+  std::array<std::uint8_t, 32> digest{};
+  const auto cleanup = [&] {
+    if (hash) BCryptDestroyHash(hash);
+    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+  };
+  if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0 ||
+      BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
+                        reinterpret_cast<PUCHAR>(&object_size), sizeof(object_size),
+                        &received, 0) < 0) {
+    cleanup();
+    throw std::runtime_error("test SHA-256 initialization failed");
+  }
+  object.resize(object_size);
+  if (content.size() > std::numeric_limits<ULONG>::max() ||
+      BCryptCreateHash(algorithm, &hash, object.data(), object_size, nullptr, 0, 0) < 0 ||
+      BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(content.data())),
+                     static_cast<ULONG>(content.size()), 0) < 0 ||
+      BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0) {
+    cleanup();
+    throw std::runtime_error("test SHA-256 computation failed");
+  }
+  cleanup();
+  constexpr char kHex[] = "0123456789ABCDEF";
+  std::string result;
+  for (const auto byte : digest) {
+    result.push_back(kHex[byte >> 4]);
+    result.push_back(kHex[byte & 0x0F]);
+  }
+  return result;
+}
+
+void RefreshProfileId(json& bundle) {
+  auto profile = bundle.at("profile");
+  profile.erase("profileId");
+  bundle["profile"]["profileId"] =
+      Sha256(json{{"profile", std::move(profile)}, {"layout", bundle.at("layout")}}.dump());
+}
 
 void Require(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
@@ -24,6 +80,12 @@ json Table(std::string name, int table_id, int unique_id, int capacity,
       {"capacity", capacity},
       {"recordSize", record_size},
   };
+}
+
+std::string FieldName(std::size_t index) {
+  char name[16]{};
+  std::snprintf(name, sizeof(name), "Field%03zu", index);
+  return name;
 }
 
 json ValidBundle() {
@@ -53,7 +115,7 @@ json ValidBundle() {
   target["relationships"] = json::array();
 
   auto source_layout = Table("RecruitTarget", 4288, 428807, 100, 8);
-  source_layout["authorityStatus"] = "commit_adapter_required";
+  source_layout["authorityStatus"] = "discovery_only";
   source_layout["fields"] = json::array({
       {{"name", "RecruitRef"}, {"encoding", "packed-reference"},
        {"byteOffset", 0}, {"storageBytes", 4}, {"bitOffset", 0},
@@ -73,10 +135,10 @@ json ValidBundle() {
        {"referenceTableId", nullptr}},
   });
 
-  return {
+  json bundle = {
       {"profile",
        {{"formatVersion", 1},
-        {"profileId", "1BA61F9965B24AC83659AC04E7969A99CCCC8161610545B379F4FD219A43BB76"},
+        {"profileId", ""},
         {"schemaIdentity", "synthetic-schema-v1"},
         {"buildIdentity", "synthetic-build-v1"},
         {"tables", json::array({target, source})}}},
@@ -86,6 +148,58 @@ json ValidBundle() {
         {"buildIdentity", "synthetic-build-v1"},
         {"tables", json::array({target_layout, source_layout})}}},
   };
+  RefreshProfileId(bundle);
+  return bundle;
+}
+
+json BoundedBundle(std::size_t table_count, std::size_t fingerprints = 3,
+                   std::size_t relationships = 0, std::size_t fields = 1) {
+  json profile_tables = json::array();
+  json layout_tables = json::array();
+  for (std::size_t index = 0; index < table_count; ++index) {
+    const auto table_id = static_cast<int>(index + 1);
+    auto profile = Table("Table" + std::to_string(index), table_id,
+                         static_cast<int>(1000 + index), 128, 8);
+    profile["rows"] = json::array();
+    for (std::size_t row = 0; row < fingerprints; ++row) {
+      char pattern[17]{};
+      std::snprintf(pattern, sizeof(pattern), "%08X%08X",
+                    static_cast<unsigned>(index), static_cast<unsigned>(row + 1));
+      profile["rows"].push_back({{"rowIndex", row}, {"patternHex", pattern},
+                                  {"maskHex", "FFFFFFFFFFFFFFFF"}});
+    }
+    profile["relationships"] = json::array();
+    for (std::size_t relationship = 0; relationship < relationships; ++relationship) {
+      profile["relationships"].push_back({
+          {"sourceRow", relationship}, {"fieldName", FieldName(relationship)},
+          {"targetTableId", table_id}, {"targetRow", 0}});
+    }
+    profile_tables.push_back(std::move(profile));
+
+    auto layout = Table("Table" + std::to_string(index), table_id,
+                        static_cast<int>(1000 + index), 128, 8);
+    layout["authorityStatus"] = "discovery_only";
+    layout["fields"] = json::array();
+    for (std::size_t field = 0; field < fields; ++field) {
+      layout["fields"].push_back({
+          {"name", FieldName(field)}, {"encoding", "unsigned"},
+          {"byteOffset", 0}, {"storageBytes", 1}, {"bitOffset", 0},
+          {"bitWidth", 8}, {"minimum", 0}, {"maximum", 255},
+          {"referenceTableId", nullptr}});
+    }
+    layout_tables.push_back(std::move(layout));
+  }
+  json bundle = {
+      {"profile", {{"formatVersion", 1}, {"profileId", ""},
+                   {"schemaIdentity", "bounded-schema"},
+                   {"buildIdentity", "bounded-build"},
+                   {"tables", std::move(profile_tables)}}},
+      {"layout", {{"formatVersion", 1}, {"schemaIdentity", "bounded-schema"},
+                  {"buildIdentity", "bounded-build"},
+                  {"tables", std::move(layout_tables)}}},
+  };
+  RefreshProfileId(bundle);
+  return bundle;
 }
 
 void RequireRejected(const json& value, const char* message) {
@@ -104,8 +218,11 @@ void TestValidProfile() {
   const auto result = cfb27::frtk::ParseProfile(ValidBundle());
   Require(result.ok(), result.error.c_str());
   Require(result.bundle->profile_id ==
-              "1BA61F9965B24AC83659AC04E7969A99CCCC8161610545B379F4FD219A43BB76",
+              ValidBundle()["profile"]["profileId"].get<std::string>(),
           "profile ID lost");
+  Require(result.bundle->profile_id ==
+              "578E6F8266A8CD1CDE203D9D75AB4F9F74A893769BC54BF39871E9160823CDAE",
+          "native digest differs from the JavaScript canonical digest");
   Require(result.bundle->tables.size() == 2, "table count mismatch");
   Require(result.bundle->tables[0].table_id == 4269, "table order changed");
   Require(result.bundle->tables[1].rows[1].row_index == 19, "row order changed");
@@ -193,20 +310,103 @@ void TestProfileIdIntegrity() {
                             "mutated content retained a stale profile ID");
 }
 
+void TestLayoutIntegrityAndAuthority() {
+  auto layout_mutation = ValidBundle();
+  layout_mutation["layout"]["tables"][0]["fields"][0]["maximum"] = 1022;
+  RequireRejectedContaining(layout_mutation, "Profile ID",
+                            "mutated layout retained a stale profile ID");
+  for (const char* authority : {"commit_adapter_required", "direct_verified"}) {
+    auto promoted = ValidBundle();
+    promoted["layout"]["tables"][0]["authorityStatus"] = authority;
+    RefreshProfileId(promoted);
+    RequireRejectedContaining(promoted, "discovery_only",
+                              "file artifact granted promoted authority");
+  }
+}
+
+void TestArtifactBounds() {
+  Require(cfb27::frtk::ParseProfile(BoundedBundle(256)).ok(),
+          "256-table boundary rejected");
+  RequireRejectedContaining(BoundedBundle(257), "256 tables",
+                            "257 tables accepted");
+
+  Require(cfb27::frtk::ParseProfile(BoundedBundle(128, 8)).ok(),
+          "1024-fingerprint boundary rejected");
+  RequireRejectedContaining(BoundedBundle(1, 9), "8 fingerprints",
+                            "nine fingerprints in one table accepted");
+  auto fingerprint_total = BoundedBundle(129, 8);
+  auto& penultimate_rows = fingerprint_total["profile"]["tables"][127]["rows"];
+  penultimate_rows.erase(penultimate_rows.begin() + 6, penultimate_rows.end());
+  auto& final_rows = fingerprint_total["profile"]["tables"][128]["rows"];
+  final_rows.erase(final_rows.begin() + 3, final_rows.end());
+  RefreshProfileId(fingerprint_total);
+  RequireRejectedContaining(fingerprint_total, "1024 fingerprints",
+                            "aggregate fingerprint overflow accepted");
+
+  const auto relationship_boundary =
+      cfb27::frtk::ParseProfile(BoundedBundle(64, 3, 64, 64));
+  Require(relationship_boundary.ok(), relationship_boundary.error.c_str());
+  RequireRejectedContaining(BoundedBundle(1, 3, 65, 65), "64 relationships",
+                            "65 relationships in one table accepted");
+  auto relationship_total = BoundedBundle(65, 3, 64, 64);
+  auto& final_relationships =
+      relationship_total["profile"]["tables"][64]["relationships"];
+  final_relationships.erase(final_relationships.begin() + 1,
+                            final_relationships.end());
+  RefreshProfileId(relationship_total);
+  RequireRejectedContaining(relationship_total, "4096 relationships",
+                            "aggregate relationship overflow accepted");
+
+  const auto field_boundary = cfb27::frtk::ParseProfile(BoundedBundle(64, 3, 0, 512));
+  Require(field_boundary.ok(), field_boundary.error.c_str());
+  RequireRejectedContaining(BoundedBundle(1, 3, 0, 513), "512 fields",
+                            "513 fields in one table accepted");
+  auto field_total = BoundedBundle(65, 3, 0, 512);
+  auto& final_fields = field_total["layout"]["tables"][64]["fields"];
+  final_fields.erase(final_fields.begin() + 1, final_fields.end());
+  RefreshProfileId(field_total);
+  RequireRejectedContaining(field_total, "32768 fields",
+                            "aggregate field overflow accepted");
+}
+
+void TestNameByteBounds() {
+  const std::string boundary(128, 'a');
+  auto names = BoundedBundle(1, 3, 1, 1);
+  names["profile"]["tables"][0]["logicalName"] = boundary;
+  names["layout"]["tables"][0]["logicalName"] = boundary;
+  names["profile"]["tables"][0]["relationships"][0]["fieldName"] = boundary;
+  names["layout"]["tables"][0]["fields"][0]["name"] = boundary;
+  RefreshProfileId(names);
+  Require(cfb27::frtk::ParseProfile(names).ok(), "128-byte names rejected");
+
+  auto table = names;
+  table["profile"]["tables"][0]["logicalName"] = boundary + "a";
+  table["layout"]["tables"][0]["logicalName"] = boundary + "a";
+  RefreshProfileId(table);
+  RequireRejectedContaining(table, "128 UTF-8 bytes", "129-byte table name accepted");
+  auto relationship = names;
+  relationship["profile"]["tables"][0]["relationships"][0]["fieldName"] = boundary + "a";
+  RefreshProfileId(relationship);
+  RequireRejectedContaining(relationship, "128 UTF-8 bytes",
+                            "129-byte relationship field name accepted");
+  auto field = names;
+  field["layout"]["tables"][0]["fields"][0]["name"] = boundary + "a";
+  RefreshProfileId(field);
+  RequireRejectedContaining(field, "128 UTF-8 bytes", "129-byte field name accepted");
+}
+
 void TestCanonicalOrdering() {
   auto tables = ValidBundle();
   auto& profile_tables = tables["profile"]["tables"];
   std::swap(profile_tables[0], profile_tables[1]);
-  tables["profile"]["profileId"] =
-      "20E3775956F879921C4883FEAEBE80AE9BEEFAAF70B2996FBBD966B80D2D192F";
+  RefreshProfileId(tables);
   RequireRejectedContaining(tables, "table order",
                             "noncanonical profile table order accepted");
 
   auto rows = ValidBundle();
   auto& target_rows = rows["profile"]["tables"][0]["rows"];
   std::swap(target_rows[0], target_rows[1]);
-  rows["profile"]["profileId"] =
-      "4982F834FBEA9CF80B45F1C51CE25DE692C9E45558C0DF3A3CA619D6405CD4C7";
+  RefreshProfileId(rows);
   RequireRejectedContaining(rows, "row order",
                             "noncanonical row order accepted");
 
@@ -217,8 +417,7 @@ void TestCanonicalOrdering() {
       {{"sourceRow", 19}, {"fieldName", "RecruitRef"},
        {"targetTableId", 4269}, {"targetRow", 37}},
   });
-  relationships["profile"]["profileId"] =
-      "F8F2D35A6B8FC420AC88079CD0FF66A8DE6EE993766AB295605E1DFB81C4EAFF";
+  RefreshProfileId(relationships);
   RequireRejectedContaining(relationships, "relationship order",
                             "noncanonical relationship order accepted");
 
@@ -241,14 +440,12 @@ void TestCanonicalOrdering() {
       {{"sourceRow", 19}, {"fieldName", "alpha"},
        {"targetTableId", 4269}, {"targetRow", 37}},
   });
-  mixed_case["profile"]["profileId"] =
-      "51A687B6984D0D05BFC2DCCAFB54F42CB0B444CD6C20423E0C9D8D8B704C88F9";
+  RefreshProfileId(mixed_case);
   const auto canonical_result = cfb27::frtk::ParseProfile(mixed_case);
   Require(canonical_result.ok(), "bytewise mixed-case relationship order rejected");
   std::swap(mixed_case["profile"]["tables"][1]["relationships"][0],
             mixed_case["profile"]["tables"][1]["relationships"][1]);
-  mixed_case["profile"]["profileId"] =
-      "AFA6A3DDCFB94D52FF2341DFEBE4CED4AFC118FE5D8CF30CB7F41E4F4A21AC16";
+  RefreshProfileId(mixed_case);
   RequireRejectedContaining(mixed_case, "relationship order",
                             "locale-style mixed-case relationship order accepted");
 }
@@ -284,6 +481,9 @@ int main() {
     TestIdentityAndTableIdentity();
     TestRows();
     TestProfileIdIntegrity();
+    TestLayoutIntegrityAndAuthority();
+    TestArtifactBounds();
+    TestNameByteBounds();
     TestCanonicalOrdering();
     TestDuplicatesAndRelationships();
     std::cout << "frtk profile smoke passed\n";

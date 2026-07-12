@@ -26,6 +26,22 @@ namespace {
 
 using nlohmann::json;
 
+constexpr std::size_t kMaxTables = 256;
+constexpr std::size_t kMaxFingerprintsPerTable = 8;
+constexpr std::size_t kMaxFingerprintsTotal = 1024;
+constexpr std::size_t kMaxRelationshipsPerTable = 64;
+constexpr std::size_t kMaxRelationshipsTotal = 4096;
+constexpr std::size_t kMaxNameBytes = 128;
+
+std::string LogicalName(const json& value, const char* message) {
+  if (!value.is_string()) throw std::invalid_argument(message);
+  auto result = value.get<std::string>();
+  if (result.empty() || result.size() > kMaxNameBytes) {
+    throw std::invalid_argument("Logical names must use 1..128 UTF-8 bytes");
+  }
+  return result;
+}
+
 bool HasExactKeys(const json& value,
                   std::initializer_list<std::string_view> expected) {
   if (!value.is_object() || value.size() != expected.size()) return false;
@@ -151,15 +167,15 @@ RelationshipConstraint ParseRelationship(const json& relationship,
                                          std::uint32_t capacity) {
   if (!HasExactKeys(relationship,
                     {"sourceRow", "fieldName", "targetTableId", "targetRow"}) ||
-      !relationship.at("fieldName").is_string() ||
-      relationship.at("fieldName").get_ref<const std::string&>().empty()) {
+      !relationship.at("fieldName").is_string()) {
     throw std::invalid_argument("Relationship definition is invalid");
   }
   return {
       .source_row = static_cast<std::uint32_t>(UnsignedBetween(
           relationship.at("sourceRow"), 0, capacity - 1,
           "Relationship source row exceeds capacity")),
-      .field_name = relationship.at("fieldName").get<std::string>(),
+      .field_name = LogicalName(relationship.at("fieldName"),
+                                "Relationship field name is invalid"),
       .target_table_id = static_cast<std::uint16_t>(UnsignedBetween(
           relationship.at("targetTableId"), 0, 0x7FFF,
           "Invalid relationship target table")),
@@ -173,14 +189,12 @@ TableProfile ParseTable(const json& table) {
   if (!HasExactKeys(table,
                     {"logicalName", "tableId", "uniqueId", "capacity",
                      "recordSize", "rows", "relationships"}) ||
-      !table.at("logicalName").is_string() ||
-      table.at("logicalName").get_ref<const std::string&>().empty() ||
       !table.at("rows").is_array() ||
       !table.at("relationships").is_array()) {
     throw std::invalid_argument("Table profile is invalid");
   }
   TableProfile result;
-  result.logical_name = table.at("logicalName").get<std::string>();
+  result.logical_name = LogicalName(table.at("logicalName"), "Table name is invalid");
   result.table_id = static_cast<std::uint16_t>(UnsignedBetween(
       table.at("tableId"), 0, 0x7FFF, "Invalid table ID"));
   result.unique_id = static_cast<std::uint32_t>(UnsignedBetween(
@@ -189,6 +203,12 @@ TableProfile ParseTable(const json& table) {
       table.at("capacity"), 1, 0x1FFFF, "Invalid capacity"));
   result.record_size = static_cast<std::uint32_t>(UnsignedBetween(
       table.at("recordSize"), 1, 4096, "Invalid recordSize"));
+  if (table.at("rows").size() > kMaxFingerprintsPerTable) {
+    throw std::range_error("At most 8 fingerprints are allowed per table");
+  }
+  if (table.at("relationships").size() > kMaxRelationshipsPerTable) {
+    throw std::range_error("At most 64 relationships are allowed per table");
+  }
 
   std::set<std::uint32_t> row_indexes;
   std::set<std::vector<std::uint8_t>> patterns;
@@ -269,6 +289,9 @@ ProfileValidationResult ParseProfile(const json& artifact) {
         !profile.at("tables").is_array() || profile.at("tables").empty()) {
       throw std::invalid_argument("Invalid version-1 profile");
     }
+    if (profile.at("tables").size() > kMaxTables) {
+      throw std::range_error("Version-1 artifacts allow at most 256 tables");
+    }
 
     ProfileBundle bundle;
     bundle.profile_id = profile.at("profileId").get<std::string>();
@@ -287,11 +310,27 @@ ProfileValidationResult ParseProfile(const json& artifact) {
         bundle.build_identity != bundle.schema.build_identity()) {
       throw std::invalid_argument("Profile/layout identity mismatch");
     }
+    for (const auto& table : bundle.schema.tables()) {
+      if (table.authority_status != AuthorityStatus::kDiscoveryOnly) {
+        throw std::invalid_argument(
+            "Version-1 file artifacts must use discovery_only authority");
+      }
+    }
 
     std::set<std::uint16_t> table_ids;
     std::set<std::uint32_t> unique_ids;
+    std::size_t fingerprint_total = 0;
+    std::size_t relationship_total = 0;
     for (const auto& table : profile.at("tables")) {
       auto parsed = ParseTable(table);
+      fingerprint_total += parsed.rows.size();
+      if (fingerprint_total > kMaxFingerprintsTotal) {
+        throw std::range_error("At most 1024 fingerprints are allowed in total");
+      }
+      relationship_total += parsed.relationships.size();
+      if (relationship_total > kMaxRelationshipsTotal) {
+        throw std::range_error("At most 4096 relationships are allowed in total");
+      }
       if (!table_ids.insert(parsed.table_id).second) {
         throw std::invalid_argument("Duplicate table ID in profile");
       }
@@ -331,8 +370,12 @@ ProfileValidationResult ParseProfile(const json& artifact) {
         }
       }
     }
-    auto hash_content = profile;
-    hash_content.erase("profileId");
+    auto profile_without_id = profile;
+    profile_without_id.erase("profileId");
+    const json hash_content = {
+        {"profile", std::move(profile_without_id)},
+        {"layout", artifact.at("layout")},
+    };
     if (Sha256Upper(hash_content.dump()) != bundle.profile_id) {
       throw std::invalid_argument("Profile ID does not match canonical content");
     }

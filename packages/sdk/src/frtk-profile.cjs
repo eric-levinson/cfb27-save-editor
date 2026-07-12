@@ -10,9 +10,16 @@ const {
 const { decodeField } = require('./frtk-fields.cjs');
 
 const TABLE_KEYS = ['logicalName', 'tableId', 'uniqueId', 'capacity', 'recordSize'];
-const AUTHORITY_STATUSES = new Set([
-  'discovery_only', 'commit_adapter_required', 'direct_verified',
-]);
+const LIMITS = Object.freeze({
+  tables: 256,
+  fingerprintsPerTable: 8,
+  fingerprintsTotal: 1024,
+  relationshipsPerTable: 64,
+  relationshipsTotal: 4096,
+  fieldsPerTable: 512,
+  fieldsTotal: 32768,
+  nameBytes: 128,
+});
 
 function compareUtf8Ordinal(left, right) {
   return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'));
@@ -25,6 +32,22 @@ function requireIdentity(value, name) {
   return value;
 }
 
+function requireLogicalName(value, name) {
+  if (typeof value === 'string') {
+    for (const character of value) {
+      const codePoint = character.codePointAt(0);
+      if (codePoint >= 0xD800 && codePoint <= 0xDFFF) {
+        throw new TypeError(`${name} must be valid UTF-8`);
+      }
+    }
+  }
+  if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') < 1 ||
+      Buffer.byteLength(value, 'utf8') > LIMITS.nameBytes) {
+    throw new TypeError(`${name} must use 1..128 UTF-8 bytes`);
+  }
+  return value;
+}
+
 function validateTableIdentity(table, extraKeys) {
   if (!hasExactKeys(table, [...TABLE_KEYS, ...extraKeys])) {
     if (table?.logicalName === 'Team' && !Object.hasOwn(table, 'tableId')) {
@@ -32,8 +55,8 @@ function validateTableIdentity(table, extraKeys) {
     }
     throw new TypeError('Table definition has unexpected or missing keys');
   }
-  if (typeof table.logicalName !== 'string' || table.logicalName.length < 1 ||
-      !isSafeIntegerBetween(table.tableId, 0, 0x7FFF) ||
+  requireLogicalName(table.logicalName, 'logical table name');
+  if (!isSafeIntegerBetween(table.tableId, 0, 0x7FFF) ||
       !isSafeIntegerBetween(table.uniqueId, 0, 0xFFFFFFFF) ||
       !isSafeIntegerBetween(table.capacity, 1, 0x1FFFF) ||
       !isSafeIntegerBetween(table.recordSize, 1, 4096)) {
@@ -73,6 +96,9 @@ function maskedPattern(recordHex, maskHex) {
 
 function compileRows(table) {
   if (!Array.isArray(table.rows)) throw new TypeError('Table rows must be an array');
+  if (table.rows.length > LIMITS.fingerprintsPerTable) {
+    throw new RangeError('At most 8 fingerprints are allowed per table');
+  }
   const rowIndexes = new Set();
   const patterns = new Set();
   let selectedBits = 0;
@@ -103,16 +129,19 @@ function compileRows(table) {
 
 function compileRelationships(table, knownTables) {
   if (!Array.isArray(table.relationships)) throw new TypeError('relationships must be an array');
+  if (table.relationships.length > LIMITS.relationshipsPerTable) {
+    throw new RangeError('At most 64 relationships are allowed per table');
+  }
   const identities = new Set();
   return table.relationships.map((relationship) => {
     if (!hasExactKeys(relationship,
       ['sourceRow', 'fieldName', 'targetTableId', 'targetRow']) ||
         !isSafeIntegerBetween(relationship.sourceRow, 0, table.capacity - 1) ||
-        typeof relationship.fieldName !== 'string' || relationship.fieldName.length < 1 ||
         !isSafeIntegerBetween(relationship.targetTableId, 0, 0x7FFF) ||
         !isSafeIntegerBetween(relationship.targetRow, 0, 0x1FFFF)) {
       throw new TypeError('Relationship definition is invalid');
     }
+    requireLogicalName(relationship.fieldName, 'relationship field name');
     const targetTable = knownTables.get(relationship.targetTableId);
     if (!targetTable) {
       throw new Error('Unknown relationship target table');
@@ -129,18 +158,22 @@ function compileRelationships(table, knownTables) {
 }
 
 function compileFields(table, knownTableIds) {
-  if (!AUTHORITY_STATUSES.has(table.authorityStatus)) {
-    throw new TypeError('Unknown table authority status');
+  if (table.authorityStatus !== 'discovery_only') {
+    throw new TypeError('Version-1 artifacts must use discovery_only authority');
   }
   if (!Array.isArray(table.fields)) throw new TypeError('Table fields must be an array');
+  if (table.fields.length > LIMITS.fieldsPerTable) {
+    throw new RangeError('At most 512 fields are allowed per table');
+  }
   const names = new Set();
   const fields = table.fields.map((field) => {
     if (!hasExactKeys(field, [
       'name', 'encoding', 'byteOffset', 'storageBytes', 'bitOffset', 'bitWidth',
       'minimum', 'maximum', 'referenceTableId',
-    ]) || typeof field.name !== 'string' || field.name.length < 1 || names.has(field.name)) {
+    ]) || names.has(field.name)) {
       throw new TypeError('Field definition is invalid or duplicated');
     }
+    requireLogicalName(field.name, 'field name');
     names.add(field.name);
     decodeField(Buffer.alloc(table.recordSize), field);
     if (field.encoding === 'packed-reference') {
@@ -168,6 +201,9 @@ function compileFrtkArtifacts({ snapshot, layout } = {}) {
   if (snapshot.tables.length === 0 || layout.tables.length === 0) {
     throw new Error('Snapshot and layout must contain at least one table');
   }
+  if (snapshot.tables.length > LIMITS.tables || layout.tables.length > LIMITS.tables) {
+    throw new RangeError('Version-1 artifacts allow at most 256 tables');
+  }
   const schemaIdentity = requireIdentity(snapshot.schemaIdentity, 'schemaIdentity');
   const buildIdentity = requireIdentity(snapshot.buildIdentity, 'buildIdentity');
   if (layout.schemaIdentity !== schemaIdentity || layout.buildIdentity !== buildIdentity) {
@@ -175,6 +211,19 @@ function compileFrtkArtifacts({ snapshot, layout } = {}) {
   }
   for (const table of snapshot.tables) validateTableIdentity(table, ['rows', 'relationships']);
   for (const table of layout.tables) validateTableIdentity(table, ['authorityStatus', 'fields']);
+  const fingerprintTotal = snapshot.tables.reduce((total, table) => total + table.rows.length, 0);
+  const relationshipTotal = snapshot.tables.reduce(
+    (total, table) => total + table.relationships.length, 0);
+  const fieldTotal = layout.tables.reduce((total, table) => total + table.fields.length, 0);
+  if (fingerprintTotal > LIMITS.fingerprintsTotal) {
+    throw new RangeError('At most 1024 fingerprints are allowed in total');
+  }
+  if (relationshipTotal > LIMITS.relationshipsTotal) {
+    throw new RangeError('At most 4096 relationships are allowed in total');
+  }
+  if (fieldTotal > LIMITS.fieldsTotal) {
+    throw new RangeError('At most 32768 fields are allowed in total');
+  }
   ensureUniqueTableIds(snapshot.tables, 'snapshot');
   ensureUniqueTableIds(layout.tables, 'layout');
 
@@ -212,18 +261,19 @@ function compileFrtkArtifacts({ snapshot, layout } = {}) {
   }
   profileTables.sort((left, right) => left.tableId - right.tableId);
   layoutTables.sort((left, right) => left.tableId - right.tableId);
-  const hashContent = {
-    formatVersion: 1,
-    schemaIdentity,
-    buildIdentity,
-    tables: profileTables,
+  const profileWithoutProfileId = {
+    formatVersion: 1, schemaIdentity, buildIdentity, tables: profileTables,
   };
+  const layoutArtifact = {
+    formatVersion: 1, schemaIdentity, buildIdentity, tables: layoutTables,
+  };
+  const hashContent = { profile: profileWithoutProfileId, layout: layoutArtifact };
   const profileId = crypto.createHash('sha256')
     .update(canonicalStringify(hashContent))
     .digest('hex').toUpperCase();
   return {
     profile: { formatVersion: 1, profileId, schemaIdentity, buildIdentity, tables: profileTables },
-    layout: { formatVersion: 1, schemaIdentity, buildIdentity, tables: layoutTables },
+    layout: layoutArtifact,
   };
 }
 

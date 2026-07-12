@@ -1,7 +1,7 @@
 # Live FrTk Table Catalog Design
 
-**Date:** 2026-07-12  
-**Status:** Proposed for implementation  
+**Date:** 2026-07-12
+**Status:** Proposed for implementation
 **Baseline:** The tree merged to `origin/main` by `7051a5a`
 
 ## Objective

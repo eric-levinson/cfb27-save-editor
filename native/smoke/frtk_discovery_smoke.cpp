@@ -154,6 +154,7 @@ class FakeBackend final : public DiscoveryBackend {
   ScanObservationResult Scan(const RowFingerprint& fingerprint,
                              std::size_t max_matches) override {
     ++scan_count;
+    max_requested_matches = std::max(max_requested_matches, max_matches);
     ScanObservationResult result{.complete = true};
     for (const auto& allocation : allocations) {
       for (std::size_t offset = 0;
@@ -210,6 +211,7 @@ class FakeBackend final : public DiscoveryBackend {
 
   std::vector<Allocation> allocations;
   std::size_t scan_count{};
+  std::size_t max_requested_matches{};
   std::size_t read_batch_count{};
   std::size_t last_batch_size{};
   std::size_t max_batch_size{};
@@ -417,6 +419,8 @@ void TestDistinctFingerprintsScanOnceGlobally() {
   (void)DiscoverTables(bundle, backend);
   Require(backend.scan_count == 5,
           "identical fingerprint bytes and mask were scanned more than once");
+  Require(backend.max_requested_matches == 8,
+          "discovery requested more than eight matches for a fingerprint");
 }
 
 void TestRelationshipsUseIndependentResolutionSnapshot() {

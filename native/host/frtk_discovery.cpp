@@ -10,7 +10,7 @@
 namespace cfb27::frtk {
 namespace {
 
-constexpr std::size_t kMaxFingerprintMatches = 64;
+constexpr std::size_t kMaxFingerprintMatches = 8;
 
 struct Candidate {
   TableDescriptor descriptor;

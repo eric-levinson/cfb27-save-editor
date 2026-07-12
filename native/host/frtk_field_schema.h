@@ -50,6 +50,8 @@ struct TableSchema {
 class SchemaRegistry {
  public:
   bool Load(const nlohmann::json& artifact, std::string* error = nullptr);
+  bool LoadTrustedForTesting(const nlohmann::json& artifact,
+                             std::string* error = nullptr);
 
   [[nodiscard]] const TableSchema* FindTable(std::uint16_t table_id) const;
   [[nodiscard]] const FieldDefinition* FindField(
@@ -65,6 +67,8 @@ class SchemaRegistry {
   }
 
  private:
+  bool LoadImpl(const nlohmann::json& artifact, bool allow_promoted_authority,
+                std::string* error);
   std::string schema_identity_;
   std::string build_identity_;
   std::vector<TableSchema> tables_;

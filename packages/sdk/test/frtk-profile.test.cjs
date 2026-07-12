@@ -14,6 +14,41 @@ function clone(value) {
   return structuredClone(value);
 }
 
+function boundedInputs(tableCount, { rows = 3, relationships = 0, fields = 1 } = {}) {
+  const snapshotTables = [];
+  const layoutTables = [];
+  for (let index = 0; index < tableCount; index += 1) {
+    const identity = {
+      logicalName: `Table${index}`, tableId: index + 1, uniqueId: index + 1000,
+      capacity: 128, recordSize: 8,
+    };
+    snapshotTables.push({
+      ...identity,
+      rows: Array.from({ length: rows }, (_, rowIndex) => ({
+        rowIndex,
+        recordHex: Buffer.from([index & 0xFF, rowIndex, 2, 3, 4, 5, 6, 7])
+          .toString('hex').toUpperCase(),
+        maskHex: 'FFFFFFFFFFFFFFFF',
+      })),
+      relationships: Array.from({ length: relationships }, (_, relationship) => ({
+        sourceRow: relationship, fieldName: `Field${relationship}`,
+        targetTableId: index + 1, targetRow: 0,
+      })),
+    });
+    layoutTables.push({
+      ...identity, authorityStatus: 'discovery_only',
+      fields: Array.from({ length: fields }, (_, field) => ({
+        name: `Field${field}`, encoding: 'unsigned', byteOffset: 0, storageBytes: 1,
+        bitOffset: 0, bitWidth: 8, minimum: 0, maximum: 255, referenceTableId: null,
+      })),
+    });
+  }
+  return {
+    snapshot: { schemaIdentity: 'bounded-schema', buildIdentity: 'bounded-build', tables: snapshotTables },
+    layout: { schemaIdentity: 'bounded-schema', buildIdentity: 'bounded-build', tables: layoutTables },
+  };
+}
+
 test('compiler emits deterministic version-1 profile and field layout artifacts', () => {
   const first = compileFrtkArtifacts(makeSyntheticInputs());
   const second = compileFrtkArtifacts(makeSyntheticInputs({ reverse: true }));
@@ -29,6 +64,82 @@ test('compiler emits deterministic version-1 profile and field layout artifacts'
   assert.deepEqual(Object.keys(first.profile), [
     'formatVersion', 'profileId', 'schemaIdentity', 'buildIdentity', 'tables',
   ]);
+});
+
+test('profile identity binds the complete canonical field layout', () => {
+  const first = compileFrtkArtifacts(makeSyntheticInputs());
+  const changed = makeSyntheticInputs();
+  changed.layout.tables[0].fields[0].maximum -= 1;
+  const second = compileFrtkArtifacts(changed);
+  assert.notEqual(first.profile.profileId, second.profile.profileId);
+});
+
+test('version-1 compiler rejects attempts to promote file artifact authority', () => {
+  for (const authorityStatus of ['commit_adapter_required', 'direct_verified']) {
+    const inputs = makeSyntheticInputs();
+    inputs.layout.tables[0].authorityStatus = authorityStatus;
+    assert.throws(() => compileFrtkArtifacts(inputs), /discovery.only/i, authorityStatus);
+  }
+});
+
+test('compiler enforces table count at 256 and rejects 257', () => {
+  assert.equal(compileFrtkArtifacts(boundedInputs(256)).profile.tables.length, 256);
+  assert.throws(() => compileFrtkArtifacts(boundedInputs(257)), /256 tables/i);
+});
+
+test('compiler enforces fingerprint per-table and total bounds', () => {
+  assert.equal(compileFrtkArtifacts(boundedInputs(128, { rows: 8 })).profile.tables.length, 128);
+  assert.throws(() => compileFrtkArtifacts(boundedInputs(1, { rows: 9 })), /8 fingerprints.*table/i);
+  const total = boundedInputs(129, { rows: 8 });
+  total.snapshot.tables[127].rows.length = 6;
+  total.snapshot.tables[128].rows.length = 3;
+  assert.throws(() => compileFrtkArtifacts(total), /1024 fingerprints.*total/i);
+});
+
+test('compiler enforces relationship per-table and total bounds', () => {
+  assert.equal(compileFrtkArtifacts(boundedInputs(64, { relationships: 64, fields: 64 }))
+    .profile.tables.length, 64);
+  assert.throws(() => compileFrtkArtifacts(boundedInputs(1, { relationships: 65, fields: 65 })),
+    /64 relationships.*table/i);
+  const total = boundedInputs(65, { relationships: 64, fields: 64 });
+  total.snapshot.tables[64].relationships.length = 1;
+  assert.throws(() => compileFrtkArtifacts(total), /4096 relationships.*total/i);
+});
+
+test('compiler enforces field per-table and total bounds', () => {
+  assert.equal(compileFrtkArtifacts(boundedInputs(64, { fields: 512 })).layout.tables.length, 64);
+  assert.throws(() => compileFrtkArtifacts(boundedInputs(1, { fields: 513 })), /512 fields.*table/i);
+  const total = boundedInputs(65, { fields: 512 });
+  total.layout.tables[64].fields.length = 1;
+  assert.throws(() => compileFrtkArtifacts(total), /32768 fields.*total/i);
+});
+
+test('compiler measures logical table and field names as 1..128 UTF-8 bytes', () => {
+  const boundary = boundedInputs(1);
+  boundary.snapshot.tables[0].logicalName = 'é'.repeat(64);
+  boundary.layout.tables[0].logicalName = 'é'.repeat(64);
+  boundary.layout.tables[0].fields[0].name = 'é'.repeat(64);
+  boundary.snapshot.tables[0].relationships = [{
+    sourceRow: 0, fieldName: 'é'.repeat(64), targetTableId: 1, targetRow: 0,
+  }];
+  assert.equal(compileFrtkArtifacts(boundary).profile.tables.length, 1);
+
+  for (const mutate of [
+    (inputs) => { inputs.snapshot.tables[0].logicalName += 'a'; inputs.layout.tables[0].logicalName += 'a'; },
+    (inputs) => { inputs.layout.tables[0].fields[0].name += 'a'; },
+    (inputs) => { inputs.snapshot.tables[0].relationships[0].fieldName += 'a'; },
+  ]) {
+    const oversized = clone(boundary);
+    mutate(oversized);
+    assert.throws(() => compileFrtkArtifacts(oversized), /128 UTF-8 bytes/i);
+  }
+});
+
+test('compiler rejects unpaired UTF-16 surrogates that are not valid UTF-8 names', () => {
+  const inputs = boundedInputs(1);
+  inputs.snapshot.tables[0].logicalName = '\uD800';
+  inputs.layout.tables[0].logicalName = '\uD800';
+  assert.throws(() => compileFrtkArtifacts(inputs), /valid UTF-8/i);
 });
 
 test('compiler rejects insufficient or duplicate row evidence', () => {

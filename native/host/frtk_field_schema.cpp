@@ -14,6 +14,20 @@ namespace {
 
 using nlohmann::json;
 
+constexpr std::size_t kMaxTables = 256;
+constexpr std::size_t kMaxFieldsPerTable = 512;
+constexpr std::size_t kMaxFieldsTotal = 32768;
+constexpr std::size_t kMaxNameBytes = 128;
+
+std::string LogicalName(const json& value, const char* message) {
+  if (!value.is_string()) throw std::invalid_argument(message);
+  auto result = value.get<std::string>();
+  if (result.empty() || result.size() > kMaxNameBytes) {
+    throw std::invalid_argument("Logical names must use 1..128 UTF-8 bytes");
+  }
+  return result;
+}
+
 bool HasExactKeys(const json& value,
                   std::initializer_list<std::string_view> expected) {
   if (!value.is_object() || value.size() != expected.size()) return false;
@@ -123,13 +137,11 @@ FieldDefinition ParseField(const json& field, std::uint32_t record_size) {
                     {"name", "encoding", "byteOffset", "storageBytes",
                      "bitOffset", "bitWidth", "minimum", "maximum",
                      "referenceTableId"}) ||
-      !field.at("name").is_string() ||
-      field.at("name").get_ref<const std::string&>().empty() ||
       !field.at("encoding").is_string()) {
     throw std::invalid_argument("Field definition is invalid");
   }
   FieldDefinition result;
-  result.name = field.at("name").get<std::string>();
+  result.name = LogicalName(field.at("name"), "Field name is invalid");
   result.encoding = field.at("encoding").get<std::string>();
   result.byte_offset = static_cast<std::uint32_t>(IntegerBetween(
       field.at("byteOffset"), 0, std::numeric_limits<std::uint32_t>::max(),
@@ -168,13 +180,11 @@ TableSchema ParseTable(const json& table) {
   if (!HasExactKeys(table,
                     {"logicalName", "tableId", "uniqueId", "capacity",
                      "recordSize", "authorityStatus", "fields"}) ||
-      !table.at("logicalName").is_string() ||
-      table.at("logicalName").get_ref<const std::string&>().empty() ||
       !table.at("fields").is_array()) {
     throw std::invalid_argument("Table schema is invalid");
   }
   TableSchema result;
-  result.logical_name = table.at("logicalName").get<std::string>();
+  result.logical_name = LogicalName(table.at("logicalName"), "Table name is invalid");
   result.table_id = static_cast<std::uint16_t>(
       IntegerBetween(table.at("tableId"), 0, 0x7FFF, "Invalid table ID"));
   result.unique_id = static_cast<std::uint32_t>(IntegerBetween(
@@ -184,6 +194,9 @@ TableSchema ParseTable(const json& table) {
   result.record_size = static_cast<std::uint32_t>(
       IntegerBetween(table.at("recordSize"), 1, 4096, "Invalid recordSize"));
   result.authority_status = ParseAuthority(table.at("authorityStatus"));
+  if (table.at("fields").size() > kMaxFieldsPerTable) {
+    throw std::range_error("At most 512 fields are allowed per table");
+  }
   std::set<std::string> names;
   for (const auto& field : table.at("fields")) {
     auto parsed = ParseField(field, result.record_size);
@@ -211,6 +224,16 @@ TableSchema ParseTable(const json& table) {
 }  // namespace
 
 bool SchemaRegistry::Load(const json& artifact, std::string* error) {
+  return LoadImpl(artifact, false, error);
+}
+
+bool SchemaRegistry::LoadTrustedForTesting(const json& artifact,
+                                           std::string* error) {
+  return LoadImpl(artifact, true, error);
+}
+
+bool SchemaRegistry::LoadImpl(const json& artifact, bool allow_promoted_authority,
+                              std::string* error) {
   try {
     if (!HasExactKeys(artifact, {"formatVersion", "schemaIdentity",
                                  "buildIdentity", "tables"}) ||
@@ -219,6 +242,9 @@ bool SchemaRegistry::Load(const json& artifact, std::string* error) {
         !artifact.at("tables").is_array() || artifact.at("tables").empty()) {
       throw std::invalid_argument("Invalid version-1 field layout");
     }
+    if (artifact.at("tables").size() > kMaxTables) {
+      throw std::range_error("Version-1 artifacts allow at most 256 tables");
+    }
     SchemaRegistry parsed;
     parsed.schema_identity_ =
         Identity(artifact.at("schemaIdentity"), "Invalid schema identity");
@@ -226,8 +252,20 @@ bool SchemaRegistry::Load(const json& artifact, std::string* error) {
         Identity(artifact.at("buildIdentity"), "Invalid build identity");
     std::set<std::uint16_t> table_ids;
     std::set<std::uint32_t> unique_ids;
+    std::size_t field_total = 0;
     for (const auto& table : artifact.at("tables")) {
+      if (table.is_object() && table.contains("fields") && table.at("fields").is_array()) {
+        field_total += table.at("fields").size();
+        if (field_total > kMaxFieldsTotal) {
+          throw std::range_error("At most 32768 fields are allowed in total");
+        }
+      }
       auto parsed_table = ParseTable(table);
+      if (!allow_promoted_authority &&
+          parsed_table.authority_status != AuthorityStatus::kDiscoveryOnly) {
+        throw std::invalid_argument(
+            "Version-1 file layouts must use discovery_only authority");
+      }
       if (!table_ids.insert(parsed_table.table_id).second) {
         throw std::invalid_argument("Duplicate table ID in layout");
       }

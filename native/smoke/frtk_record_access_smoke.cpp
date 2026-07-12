@@ -48,7 +48,7 @@ ProfileBundle Bundle(const char* authority) {
            Field("TargetRef", "packed-reference", 4, 4, 0, 32, 0xFFFFFFFFll, 22)
          })}}
       })}};
-  Require(result.schema.Load(schema, &error), error.c_str());
+  Require(result.schema.LoadTrustedForTesting(schema, &error), error.c_str());
   return result;
 }
 
