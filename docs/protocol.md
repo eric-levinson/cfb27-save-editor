@@ -47,6 +47,16 @@ Error response:
   readable private-memory ranges.
 - `writeTransaction { transactionId, operations }` — apply a bounded guarded
   batch with complete preflight comparison, readback, and rollback.
+- `loadFrtkProfile { profile, layout }` — atomically validate and load a
+  matching version-1 bundle.
+- `discoverFrtkCatalog {}` — resolve every required table into a new catalog.
+- `inspectFrtkCatalog { generation }` — return sanitized table summaries.
+- `readFrtkRecords { generation, records }` — read typed fields from
+  `{ uniqueId, row, fields }` selectors.
+- `transactFrtkFields { transactionId, generation, changes }` — submit logical
+  `{ uniqueId, row, field, value }` changes.
+- `invalidateFrtkCatalog { reason }` — stale all handles. Reasons are
+  `caller_transition`, `save_changed`, and `shutdown`.
 
 `hello.capabilities` advertises the memory commands as `memoryScan` and
 `memoryRead`, allocation-aware scans as `memoryScanAllocationMetadata`, guarded
@@ -54,6 +64,30 @@ writes as `memoryWriteTransaction`, and structured event registration as
 `telemetry`. `status.sessionWritesDisabled` reports whether an
 unverifiable rollback has permanently disabled writes for the current host
 session.
+
+The FrTk families are advertised as `frtkProfileV1`, `frtkCatalogV1`,
+`frtkRecordReadV1`, and `frtkFieldTransactionV1`. Public table selectors always
+use `uniqueId`; logical names are display text and current-build table IDs stay
+host-internal.
+
+### Typed FrTk catalog
+
+Profile and layout identity are validated together against the running build.
+Discovery advances generation on every attempt and installs no partial catalog
+when a required table is unresolved. Inspection returns sanitized identity,
+capacity, authority, generation, and bounded evidence only.
+
+Typed reads accept 1–64 record selectors and return numbers or packed
+references represented as `{ uniqueId, row }`. Typed transactions accept
+1–128 logical changes, revalidate the catalog, reread complete records, encode
+fields through the layout, and pass the host-internal plan to the existing
+guarded engine. Only `direct_verified` tables may proceed; other authority
+states return `FRTK_AUTHORITY_UNPROVEN`.
+
+Typed responses never expose addresses, byte buffers, masks, field offsets,
+memory ranges, or transaction operations. Explicit invalidation and a
+`game_ready:false` transition advance generation; stale requests return
+`FRTK_CATALOG_STALE` and must rediscover.
 
 ### Structured telemetry
 
@@ -230,6 +264,9 @@ Guarded writes additionally return `MEMORY_MISMATCH`,
 `ROLLBACK_VERIFICATION_FAILED`, and `SESSION_WRITES_DISABLED`. Malformed
 transaction shapes, addresses, hex, and overlapping operations return
 `INVALID_REQUEST`.
+Typed FrTk commands additionally return `FRTK_PROFILE_INVALID`,
+`FRTK_DISCOVERY_FAILED`, `FRTK_CATALOG_STALE`, `FRTK_FIELD_INVALID`, and
+`FRTK_AUTHORITY_UNPROVEN`.
 
 The unversioned legacy text pipe remains temporarily available for migration,
 but it is not the integration contract for new tools.

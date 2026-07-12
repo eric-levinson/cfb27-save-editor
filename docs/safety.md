@@ -36,6 +36,17 @@ reject all further writes until the process restarts. Integrations should call
 `hello`, inspect `writesAllowed`, check `status.sessionWritesDisabled`, and
 handle the transaction's verified status explicitly.
 
+The typed FrTk protocol is stricter than the raw memory surface. Profile and
+layout load as one validated bundle, public table selectors use Unique IDs,
+and discovery installs no partial catalog. Explicit transitions, save changes,
+shutdown, and `game_ready:false` stale the catalog generation.
+
+Typed responses omit process addresses, raw bytes, patterns, masks, offsets,
+ranges, and transaction plans. Typed writes accept only logical
+Unique-ID/row/field/value changes, reread live records, and use the existing
+guarded engine. Non-`direct_verified` authority fails closed before planning;
+rollback failure still disables raw, typed, and Lua writes for the session.
+
 `CFB27_SMOKE_ALLOW_WRITES=1` is a native test gate recognized only when the
 hosting executable is exactly `cfb27_protocol_smoke.exe`. It does not enable
 writes in the game, MMC, or any other executable.
