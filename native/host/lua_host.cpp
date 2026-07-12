@@ -1116,11 +1116,11 @@ cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
       return ErrorResponse(id, "INVALID_REQUEST", "Invalid scanMemory params");
     }
     auto pattern = params["patternHex"].is_string()
-        ? cfb27::memory::MappedBytes::FromUpperHex(
+        ? cfb27::memory::DecodeScanHex(
               params["patternHex"].get_ref<const std::string&>())
         : std::nullopt;
     auto mask = params["maskHex"].is_string()
-        ? cfb27::memory::MappedBytes::FromUpperHex(
+        ? cfb27::memory::DecodeScanHex(
               params["maskHex"].get_ref<const std::string&>())
         : std::nullopt;
     const auto max_matches = ReadUnsigned(

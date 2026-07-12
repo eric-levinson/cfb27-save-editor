@@ -72,13 +72,27 @@ bool Request(const std::wstring& pipe_name, const Json& request, Json& response)
   return !response.is_discarded();
 }
 
-std::optional<std::size_t> MatchingBrace(const std::string& source,
-                                         std::size_t opening) {
-  enum class LexicalState { kCode, kLineComment, kBlockComment, kString, kChar };
+struct LexicalBrace {
+  char token{};
+  std::size_t position{};
+};
+
+std::vector<LexicalBrace> LexicalBraces(const std::string& source,
+                                        std::size_t begin, std::size_t end) {
+  enum class LexicalState {
+    kCode,
+    kLineComment,
+    kBlockComment,
+    kString,
+    kChar,
+    kRawString,
+  };
   LexicalState state = LexicalState::kCode;
-  std::size_t depth = 0;
   bool escaped = false;
-  for (std::size_t index = opening; index < source.size(); ++index) {
+  std::string raw_terminator;
+  std::vector<LexicalBrace> braces;
+  for (std::size_t index = begin;
+       index < end && index < source.size(); ++index) {
     const char current = source[index];
     const char next = index + 1 < source.size() ? source[index + 1] : '\0';
     switch (state) {
@@ -89,16 +103,27 @@ std::optional<std::size_t> MatchingBrace(const std::string& source,
         } else if (current == '/' && next == '*') {
           state = LexicalState::kBlockComment;
           ++index;
+        } else if (current == 'R' && next == '"') {
+          const auto delimiter_begin = index + 2;
+          const auto parenthesis = source.find('(', delimiter_begin);
+          if (parenthesis != std::string::npos &&
+              parenthesis - delimiter_begin <= 16 &&
+              source.substr(delimiter_begin, parenthesis - delimiter_begin)
+                      .find_first_of(" \\\t\v\f\r\n()") == std::string::npos) {
+            raw_terminator = ")" +
+                source.substr(delimiter_begin, parenthesis - delimiter_begin) +
+                "\"";
+            state = LexicalState::kRawString;
+            index = parenthesis;
+          }
         } else if (current == '"') {
           state = LexicalState::kString;
           escaped = false;
         } else if (current == '\'') {
           state = LexicalState::kChar;
           escaped = false;
-        } else if (current == '{') {
-          ++depth;
-        } else if (current == '}' && depth > 0 && --depth == 0) {
-          return index;
+        } else if (current == '{' || current == '}') {
+          braces.push_back({current, index});
         }
         break;
       case LexicalState::kLineComment:
@@ -121,9 +146,43 @@ std::optional<std::size_t> MatchingBrace(const std::string& source,
           state = LexicalState::kCode;
         }
         break;
+      case LexicalState::kRawString:
+        if (source.compare(index, raw_terminator.size(), raw_terminator) == 0) {
+          index += raw_terminator.size() - 1;
+          state = LexicalState::kCode;
+        }
+        break;
+    }
+  }
+  return braces;
+}
+
+std::optional<std::size_t> MatchingBrace(const std::string& source,
+                                         std::size_t opening) {
+  std::size_t depth = 0;
+  for (const auto& brace : LexicalBraces(source, opening, source.size())) {
+    if (brace.token == '{') {
+      ++depth;
+    } else if (depth > 0 && --depth == 0) {
+      return brace.position;
     }
   }
   return std::nullopt;
+}
+
+std::optional<std::size_t> ContainingScopeOpen(const std::string& source,
+                                               std::size_t function_open,
+                                               std::size_t position) {
+  std::vector<std::size_t> scopes;
+  for (const auto& brace : LexicalBraces(source, function_open, position)) {
+    if (brace.token == '{') {
+      scopes.push_back(brace.position);
+    } else if (!scopes.empty()) {
+      scopes.pop_back();
+    }
+  }
+  if (scopes.empty()) return std::nullopt;
+  return scopes.back();
 }
 
 bool VerifyMatchingBraceFixtures(std::string& error) {
@@ -134,6 +193,7 @@ bool VerifyMatchingBraceFixtures(std::string& error) {
       R"({ /* } closes only a block comment */ int value = 1; })",
       R"({ const char brace = '}'; int value = 1; })",
       R"fixture({ const char* braces = "escaped quote: \" }"; int value = 1; })fixture",
+      R"fixture({ const char* braces = R"tag("})tag"; int value = 1; })fixture",
   };
   for (const auto& fixture : fixtures) {
     const auto closing = MatchingBrace(fixture, 0);
@@ -141,6 +201,18 @@ bool VerifyMatchingBraceFixtures(std::string& error) {
       error = "brace matcher treated a comment or literal brace as syntax";
       return false;
     }
+  }
+  return true;
+}
+
+bool VerifyContainingScopeFixtures(std::string& error) {
+  const std::string fixture =
+      R"fixture({ { const char* decoy = R"tag({)tag"; LOCK; } })fixture";
+  const auto lock_at = fixture.find("LOCK");
+  const auto scope_open = ContainingScopeOpen(fixture, 0, lock_at);
+  if (!scope_open || *scope_open != 2) {
+    error = "containing scope selected a brace from a non-code token";
+    return false;
   }
   return true;
 }
@@ -182,9 +254,12 @@ bool VerifyLuaWriteU8Source(const std::filesystem::path& path,
     error = "LuaWriteU8 write lock was not found";
     return false;
   }
-  const auto lock_scope_open = source.rfind('{', lock_at);
-  const auto lock_scope_close = MatchingBrace(source, lock_scope_open);
-  if (lock_scope_open == function_open || !lock_scope_close ||
+  const auto lock_scope_open =
+      ContainingScopeOpen(source, function_open, lock_at);
+  const auto lock_scope_close = lock_scope_open
+      ? MatchingBrace(source, *lock_scope_open)
+      : std::nullopt;
+  if (!lock_scope_open || *lock_scope_open == function_open || !lock_scope_close ||
       *lock_scope_close >= *function_close) {
     error = "LuaWriteU8 write lock must have a normally exited nested scope";
     return false;
@@ -225,6 +300,10 @@ int wmain(int argc, wchar_t** argv) {
   if (!VerifyMatchingBraceFixtures(matcher_error)) {
     std::cerr << "startup source matcher RED: " << matcher_error << '\n';
     return 8;
+  }
+  if (!VerifyContainingScopeFixtures(matcher_error)) {
+    std::cerr << "startup scope matcher RED: " << matcher_error << '\n';
+    return 9;
   }
   if (argc < 2 || argc > 3) {
     std::wcerr << L"usage: startup_host_smoke <cfb27_lua_host.dll> [lua_host.cpp]\n";

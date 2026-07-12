@@ -24,6 +24,21 @@ std::uintptr_t g_scan_destination{};
 bool g_attempted_scan_buffer_read{};
 bool g_scan_destination_is_mapped{};
 
+bool IsReadableProtection(DWORD protection) {
+  if ((protection & (PAGE_GUARD | PAGE_NOACCESS)) != 0) return false;
+  switch (protection & 0xFF) {
+    case PAGE_READONLY:
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READ:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+      return true;
+    default:
+      return false;
+  }
+}
+
 bool TestRead(const void* source, void* destination, std::size_t length,
               std::size_t& copied) {
   copied = 0;
@@ -34,7 +49,7 @@ bool TestRead(const void* source, void* destination, std::size_t length,
     g_scan_destination_is_mapped =
         VirtualQuery(destination, &info, sizeof(info)) == sizeof(info) &&
         info.State == MEM_COMMIT && info.Type == MEM_MAPPED &&
-        (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0;
+        IsReadableProtection(info.Protect);
   } else if (g_scan_destination >= begin && g_scan_destination - begin < length) {
     g_attempted_scan_buffer_read = true;
   }
@@ -59,7 +74,7 @@ void RequireMappedStorage(const void* pointer, const char* message) {
   Require(pointer != nullptr &&
               VirtualQuery(pointer, &info, sizeof(info)) == sizeof(info) &&
               info.State == MEM_COMMIT && info.Type == MEM_MAPPED &&
-              (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0,
+              IsReadableProtection(info.Protect),
           message);
 }
 
@@ -207,6 +222,19 @@ void TestScanExcludesMaskBuffer() {
     Require(address && (*address < mask_begin || *address >= mask_end),
             "scan returned request mask buffer");
   }
+}
+
+void TestScanHexDecodeRejectsBeforeMappedAllocation() {
+  const std::string oversized_hex(
+      (cfb27::memory::kMaxPatternBytes + 1) * 2, 'F');
+  Require(!cfb27::memory::DecodeScanHex(oversized_hex),
+          "scan hex decoder rejects over-limit bytes before allocation");
+
+  const auto unrestricted =
+      cfb27::memory::MappedBytes::FromUpperHex(oversized_hex);
+  Require(unrestricted &&
+              unrestricted->size() == cfb27::memory::kMaxPatternBytes + 1,
+          "general mapped hex decoding remains unrestricted");
 }
 
 void TestAllocationTopology() {
@@ -519,6 +547,7 @@ void TestPagedScanBeyondOldAggregateLimit() {
 int main() {
   try {
     TestAddressParsing();
+    TestScanHexDecodeRejectsBeforeMappedAllocation();
     TestRegionEligibility();
     TestScanAndRead();
     TestAllocationTopology();

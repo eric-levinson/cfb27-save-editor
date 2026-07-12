@@ -606,6 +606,12 @@ int wmain(int argc, wchar_t** argv) {
                       {"command", "scanMemory"}, {"params", invalid_params}}, response, false) ||
       !IsError(response, "INVALID_REQUEST")) return 33;
   invalid_params = allowed_scan_params;
+  invalid_params["patternHex"] = std::string((4096 + 1) * 2, 'F');
+  invalid_params["maskHex"] = std::string((4096 + 1) * 2, 'F');
+  if (!Request(pipe, {{"protocol", 1}, {"id", "scan-hostile-oversized-pattern"},
+                      {"command", "scanMemory"}, {"params", invalid_params}}, response, false) ||
+      !IsError(response, "INVALID_REQUEST")) return 111;
+  invalid_params = allowed_scan_params;
   invalid_params["patternHex"] = "cfb27a1100a1b2c3d4e5f60718293a4b";
   if (!Request(pipe, {{"protocol", 1}, {"id", "scan-lower-hex"},
                       {"command", "scanMemory"}, {"params", invalid_params}}, response, false) ||

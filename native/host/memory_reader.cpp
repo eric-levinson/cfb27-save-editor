@@ -112,6 +112,8 @@ MappedBytes::~MappedBytes() {
   if (mapping_ != nullptr) CloseHandle(mapping_);
 }
 
+namespace {
+
 SIZE_T ProductionQuery(const void* address, MEMORY_BASIC_INFORMATION* information,
                        SIZE_T length) {
   return VirtualQuery(address, information, length);
@@ -181,6 +183,8 @@ std::optional<AllocationMetadata> ResolveAllocationMetadata(
       cached->second.protection, offset};
 }
 
+}  // namespace
+
 MappedBytes::MappedBytes(MappedBytes&& other) noexcept
     : mapping_(std::exchange(other.mapping_, nullptr)),
       view_(std::exchange(other.view_, nullptr)),
@@ -234,6 +238,11 @@ std::optional<MappedBytes> MappedBytes::FromUpperHex(std::string_view text) {
     decoded->view_[index / 2] = static_cast<std::uint8_t>((*high << 4) | *low);
   }
   return decoded;
+}
+
+std::optional<MappedBytes> DecodeScanHex(std::string_view text) {
+  if (text.size() > kMaxPatternBytes * 2) return std::nullopt;
+  return MappedBytes::FromUpperHex(text);
 }
 
 std::optional<MappedBytes> MappedBytes::CopyFrom(

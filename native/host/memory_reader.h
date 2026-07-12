@@ -46,6 +46,8 @@ constexpr std::size_t kMaxReadRanges = 64;
 constexpr std::size_t kMaxReadRangeBytes = 64ull * 1024;
 constexpr std::size_t kMaxReadBytes = 256ull * 1024;
 
+std::optional<MappedBytes> DecodeScanHex(std::string_view text);
+
 namespace detail {
 
 enum class ScanPageBoundary {
