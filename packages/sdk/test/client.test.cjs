@@ -39,6 +39,41 @@ async function fakeClient(t, responder) {
   return createClient({ pipeName, timeoutMs: 1000 });
 }
 
+async function fakeErrorClient(t, errorFactory) {
+  const pipeName = testPipeName('transaction-error');
+  const server = net.createServer((socket) => {
+    const decoder = new FrameDecoder();
+    socket.on('data', (chunk) => {
+      for (const request of decoder.push(chunk)) {
+        socket.end(encodeFrame({
+          protocol: 1,
+          id: request.id,
+          ok: false,
+          error: errorFactory(request),
+        }));
+      }
+    });
+  });
+  await listen(server, pipeName);
+  t.after(() => server.close());
+  return createClient({ pipeName, timeoutMs: 1000 });
+}
+
+async function fakeRawResponseClient(t, responseFactory) {
+  const pipeName = testPipeName('transaction-raw-error');
+  const server = net.createServer((socket) => {
+    const decoder = new FrameDecoder();
+    socket.on('data', (chunk) => {
+      for (const request of decoder.push(chunk)) {
+        socket.end(encodeFrame(responseFactory(request)));
+      }
+    });
+  });
+  await listen(server, pipeName);
+  t.after(() => server.close());
+  return createClient({ pipeName, timeoutMs: 1000 });
+}
+
 const VALID_SCAN_OPTIONS = Object.freeze({
   patternHex: 'CFB27A1100A1B2C3D4E5F60718293A4B',
   maskHex: 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF',
@@ -71,9 +106,257 @@ const VALID_READ_RESULT = Object.freeze({
   })]),
 });
 
+const VALID_TRANSACTION_REQUEST = Object.freeze({
+  transactionId: 'recruiting.influence-proof-1',
+  operations: Object.freeze([Object.freeze({
+    address: '0x7FF612340000',
+    expectedHex: '1020',
+    replacementHex: '1121',
+  })]),
+});
+
+const VALID_TRANSACTION_RESULT = Object.freeze({
+  transactionId: 'recruiting.influence-proof-1',
+  status: 'applied_verified',
+  operations: Object.freeze([Object.freeze({ index: 0, applied: true, verified: true })]),
+});
+
 test('SDK publishes stable memory error codes', () => {
   for (const code of ['MEMORY_ACCESS_DENIED', 'SCAN_LIMIT_EXCEEDED', 'TOO_MANY_MATCHES']) {
     assert.ok(ERROR_CODES.includes(code), `missing ${code}`);
+  }
+});
+
+test('SDK publishes all stable guarded transaction error codes', () => {
+  for (const code of [
+    'MEMORY_ACCESS_DENIED',
+    'MEMORY_MISMATCH',
+    'TRANSACTION_LIMIT_EXCEEDED',
+    'TRANSACTION_APPLY_FAILED',
+    'ROLLBACK_VERIFICATION_FAILED',
+    'SESSION_WRITES_DISABLED',
+  ]) {
+    assert.ok(ERROR_CODES.includes(code), `missing ${code}`);
+  }
+});
+
+test('writeTransaction clones caller input and sends the exact typed command', async (t) => {
+  const requests = [];
+  let serializedParams;
+  const originalStringify = JSON.stringify;
+  JSON.stringify = function captureFrozenTransaction(value, ...args) {
+    if (value?.command === 'writeTransaction') serializedParams = value.params;
+    return originalStringify.call(this, value, ...args);
+  };
+  t.after(() => { JSON.stringify = originalStringify; });
+  const client = await fakeClient(t, (request) => {
+    requests.push({ command: request.command, params: request.params });
+    return VALID_TRANSACTION_RESULT;
+  });
+  const input = {
+    transactionId: VALID_TRANSACTION_REQUEST.transactionId,
+    operations: [{ ...VALID_TRANSACTION_REQUEST.operations[0] }],
+  };
+  const pending = client.writeTransaction(input);
+  input.transactionId = 'mutated';
+  input.operations[0].address = '0x1';
+  input.operations.push({ address: '0x2', expectedHex: '00', replacementHex: '01' });
+
+  const result = await pending;
+  assert.deepEqual(result, VALID_TRANSACTION_RESULT);
+  assert.equal(Object.isFrozen(serializedParams), true);
+  assert.equal(Object.isFrozen(serializedParams.operations), true);
+  assert.equal(Object.isFrozen(serializedParams.operations[0]), true);
+  assert.equal(Object.isFrozen(result), true);
+  assert.equal(Object.isFrozen(result.operations), true);
+  assert.equal(Object.isFrozen(result.operations[0]), true);
+  assert.deepEqual(requests, [{
+    command: 'writeTransaction',
+    params: VALID_TRANSACTION_REQUEST,
+  }]);
+});
+
+test('writeTransaction rejects malformed or unsafe requests before creating a socket', async () => {
+  const originalCreateConnection = net.createConnection;
+  let socketCreations = 0;
+  net.createConnection = (...args) => {
+    socketCreations += 1;
+    return originalCreateConnection(...args);
+  };
+  try {
+    const client = createClient({ pipeName: testPipeName('unused'), timeoutMs: 25 });
+    const operation = { ...VALID_TRANSACTION_REQUEST.operations[0] };
+    const cases = [
+      undefined,
+      {},
+      { ...VALID_TRANSACTION_REQUEST, extra: true },
+      { ...VALID_TRANSACTION_REQUEST, status: 'applied_verified' },
+      { ...VALID_TRANSACTION_REQUEST, result: VALID_TRANSACTION_RESULT },
+      { ...VALID_TRANSACTION_REQUEST, transactionId: '' },
+      { ...VALID_TRANSACTION_REQUEST, transactionId: 'a'.repeat(65) },
+      { ...VALID_TRANSACTION_REQUEST, transactionId: 'invalid id' },
+      { ...VALID_TRANSACTION_REQUEST, operations: [] },
+      { ...VALID_TRANSACTION_REQUEST, operations: Array.from({ length: 33 }, () => operation) },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, extra: true }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, status: 'applied' }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, address: 0x1234 }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, address: '0x7ff612340000' }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, address: '0x0001' }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, expectedHex: '0' }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, expectedHex: 'GG' }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, expectedHex: 'aa' }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, replacementHex: '' }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, replacementHex: '1' }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, replacementHex: 'gg' }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{ ...operation, replacementHex: '112233' }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{
+        ...operation,
+        expectedHex: '00'.repeat(4097),
+        replacementHex: '11'.repeat(4097),
+      }] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [
+        { address: '0x1000', expectedHex: '0000', replacementHex: '1111' },
+        { address: '0x1001', expectedHex: '00', replacementHex: '11' },
+      ] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [
+        { address: '0x1001', expectedHex: '00', replacementHex: '11' },
+        { address: '0x1000', expectedHex: '0000', replacementHex: '1111' },
+      ] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [
+        ...Array.from({ length: 16 }, (_, index) => ({
+          address: `0x${(0x10000 + index * 0x2000).toString(16).toUpperCase()}`,
+          expectedHex: '00'.repeat(4096),
+          replacementHex: '11'.repeat(4096),
+        })),
+        { address: '0x30000', expectedHex: '00', replacementHex: '11' },
+      ] },
+      { ...VALID_TRANSACTION_REQUEST, operations: [{
+        address: '0xFFFFFFFFFFFFFFFF', expectedHex: '0000', replacementHex: '1111',
+      }] },
+    ];
+    for (const input of cases) {
+      await assert.rejects(
+        Promise.resolve().then(() => client.writeTransaction(input)),
+        (error) => error.code === 'INVALID_REQUEST',
+      );
+    }
+    assert.equal(socketCreations, 0);
+  } finally {
+    net.createConnection = originalCreateConnection;
+  }
+});
+
+test('writeTransaction strictly validates every host result property', async (t) => {
+  const invalidResults = [
+    undefined,
+    {},
+    { ...VALID_TRANSACTION_RESULT, extra: true },
+    { ...VALID_TRANSACTION_RESULT, transactionId: 'other.transaction' },
+    { ...VALID_TRANSACTION_RESULT, status: 'rolled_back_verified' },
+    { ...VALID_TRANSACTION_RESULT, operations: 'applied' },
+    { ...VALID_TRANSACTION_RESULT, operations: [] },
+    { ...VALID_TRANSACTION_RESULT, operations: [{ ...VALID_TRANSACTION_RESULT.operations[0], extra: true }] },
+    { ...VALID_TRANSACTION_RESULT, operations: [{ ...VALID_TRANSACTION_RESULT.operations[0], index: 1 }] },
+    { ...VALID_TRANSACTION_RESULT, operations: [{ ...VALID_TRANSACTION_RESULT.operations[0], applied: 1 }] },
+    { ...VALID_TRANSACTION_RESULT, operations: [{ ...VALID_TRANSACTION_RESULT.operations[0], applied: false }] },
+    { ...VALID_TRANSACTION_RESULT, operations: [{ ...VALID_TRANSACTION_RESULT.operations[0], verified: 'true' }] },
+    { ...VALID_TRANSACTION_RESULT, operations: [{ ...VALID_TRANSACTION_RESULT.operations[0], verified: false }] },
+    { ...VALID_TRANSACTION_RESULT, operations: [{ ...VALID_TRANSACTION_RESULT.operations[0], address: '0x7FF612340000' }] },
+    { ...VALID_TRANSACTION_RESULT, operations: [{ ...VALID_TRANSACTION_RESULT.operations[0], bytesHex: '1020' }] },
+  ];
+  let index = 0;
+  const client = await fakeClient(t, () => invalidResults[index++]);
+  for (const ignored of invalidResults) {
+    await assert.rejects(
+      client.writeTransaction(VALID_TRANSACTION_REQUEST),
+      (error) => error.code === 'INVALID_RESPONSE',
+    );
+  }
+});
+
+test('writeTransaction sanitizes allowlisted host errors and discards hostile details', async (t) => {
+  const codes = [
+    'INVALID_REQUEST',
+    'UNSUPPORTED_BUILD',
+    'MEMORY_ACCESS_DENIED',
+    'MEMORY_MISMATCH',
+    'TRANSACTION_LIMIT_EXCEEDED',
+    'TRANSACTION_APPLY_FAILED',
+    'ROLLBACK_VERIFICATION_FAILED',
+    'SESSION_WRITES_DISABLED',
+  ];
+  let index = 0;
+  const client = await fakeErrorClient(t, () => {
+    const code = codes[index++];
+    const error = {
+      code,
+      message: 'address 0x7FF612340000 expected 1020 actual DEADBEEF',
+    };
+    if (code === 'TRANSACTION_APPLY_FAILED' || code === 'ROLLBACK_VERIFICATION_FAILED') {
+      error.details = {
+        transactionId: VALID_TRANSACTION_REQUEST.transactionId,
+        status: code === 'TRANSACTION_APPLY_FAILED'
+          ? 'rolled_back_verified'
+          : 'rollback_unverified',
+        operations: [{ index: 0, applied: true, verified: code === 'TRANSACTION_APPLY_FAILED' }],
+      };
+    } else error.details = {};
+    return error;
+  });
+  for (const code of codes) {
+    await assert.rejects(client.writeTransaction(VALID_TRANSACTION_REQUEST), (error) => {
+      assert.equal(error.code, code);
+      assert.equal(error.details, undefined);
+      assert.equal(error.message.includes('0x7FF612340000'), false);
+      assert.equal(error.message.includes('1020'), false);
+      assert.equal(error.message.includes('DEADBEEF'), false);
+      return true;
+    });
+  }
+});
+
+test('writeTransaction validates raw host error envelopes before generic conversion', async (t) => {
+  const hostile = '0x7FF612340000 expected 1020 actual DEADBEEF';
+  const responseFactories = [
+    (request) => ({ protocol: 1, id: request.id, ok: false,
+      error: { code: 'HOSTILE_CODE', message: hostile, details: {} } }),
+    (request) => ({ protocol: 1, id: request.id, ok: false,
+      error: { code: 'MEMORY_MISMATCH', message: 42, details: {} } }),
+    (request) => ({ protocol: 1, id: request.id, ok: false,
+      error: { code: 'MEMORY_MISMATCH', details: {} } }),
+    (request) => ({ protocol: 1, id: request.id, ok: false,
+      error: { code: 'MEMORY_MISMATCH', message: hostile } }),
+    (request) => ({ protocol: 1, id: request.id, ok: false,
+      error: { code: 'MEMORY_MISMATCH', message: hostile,
+        details: {}, address: '0x7FF612340000', bytesHex: 'DEADBEEF' } }),
+    (request) => ({ protocol: 1, id: request.id, ok: false,
+      error: { code: 'TRANSACTION_APPLY_FAILED', message: hostile, details: 'DEADBEEF' } }),
+    (request) => ({ protocol: 1, id: request.id, ok: false,
+      error: { code: 'MEMORY_MISMATCH', message: hostile,
+        details: { address: '0x7FF612340000', bytesHex: 'DEADBEEF' } } }),
+    (request) => ({ protocol: 1, id: request.id, ok: false,
+      error: { code: 'TRANSACTION_APPLY_FAILED', message: hostile, details: {
+        transactionId: VALID_TRANSACTION_REQUEST.transactionId,
+        status: 'rolled_back_verified',
+        operations: [{ index: 0, applied: true, verified: true, bytesHex: 'DEADBEEF' }],
+      } } }),
+    (request) => ({ protocol: 1, id: request.id, ok: false,
+      error: { code: 'MEMORY_MISMATCH', message: hostile, details: {} },
+      bytesHex: 'DEADBEEF' }),
+    (request) => ({ protocol: 1, id: request.id, ok: false }),
+    (request) => ({ protocol: 1, id: request.id, ok: false, error: 'not-an-error-object' }),
+  ];
+  let index = 0;
+  const client = await fakeRawResponseClient(t, (request) => responseFactories[index++](request));
+  for (const ignored of responseFactories) {
+    await assert.rejects(client.writeTransaction(VALID_TRANSACTION_REQUEST), (error) => {
+      assert.equal(error.code, 'INVALID_RESPONSE');
+      assert.equal(error.details, undefined);
+      assert.equal(error.message.includes('0x7FF612340000'), false);
+      assert.equal(error.message.includes('1020'), false);
+      assert.equal(error.message.includes('DEADBEEF'), false);
+      return true;
+    });
   }
 });
 
