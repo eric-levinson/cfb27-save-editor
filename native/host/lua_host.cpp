@@ -39,7 +39,7 @@ namespace {
 
 constexpr wchar_t kPipePrefix[] = L"\\\\.\\pipe\\CFB27LuaHost.";
 constexpr wchar_t kV1PipePrefix[] = L"\\\\.\\pipe\\CFB27LuaHost.v1.";
-constexpr char kHostVersion[] = "0.2.0-dev.1";
+constexpr char kHostVersion[] = "0.2.0-dev.2";
 constexpr std::uintmax_t kSupportedExecutableSize = 247845776;
 constexpr char kSupportedExecutableSha256[] = "9E654AD49C4702D8F9FA4E38FD1110ABE657DD38926D4124B30C70E7D29ADFE8";
 constexpr DWORD kTickMilliseconds = 100;

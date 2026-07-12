@@ -1,6 +1,6 @@
 # Getting started
 
-CFB27 Lua Hook `0.2.0-dev.1` is a Windows x64 developer preview. It requires
+CFB27 Lua Hook `0.2.0-dev.2` is a Windows x64 developer preview. It requires
 Node.js 20 or later, CMake 3.24 or later, Visual Studio 2022 C++ build tools,
 MMC, and a separately launched offline CFB27 session.
 
