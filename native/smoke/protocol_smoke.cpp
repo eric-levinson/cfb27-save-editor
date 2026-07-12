@@ -537,6 +537,23 @@ int wmain(int argc, wchar_t** argv) {
       response["result"]["records"][1]["values"] !=
           Json::array({{{"field", "Stage"}, {"value", 8}},
                        {{"field", "Score"}, {"value", 0x5678}}})) return 117;
+  const std::string lua_database_source =
+      "assert(type(CFB27)=='table' and type(CFB27.db)=='table'); "
+      "local t=CFB27.db:GetTableByUniqueId(900001); local r=t:GetRecord(0); "
+      "assert(r:GetField('Score')==0x1234 and r:GetField('Stage')==7); "
+      "for _,v in ipairs({tostring(t),tostring(r)}) do "
+      "assert(not v:find('0x') and not v:find('userdata:') and "
+      "not v:match('%x%x%x%x%x%x%x%x')) end; "
+      "local before=r:GetField('Score'); "
+      "assert(not pcall(function() CFB27.db:Transaction(function(tx) "
+      "assert(tostring(tx)=='CFB27.db transaction'); "
+      "tx:SetField(r,'Score',99) end) end)); "
+      "assert(r:GetField('Score')==before)";
+  if (!Request(pipe, {{"protocol", 1}, {"id", "frtk-lua-database"},
+                      {"command", "evaluate"},
+                      {"params", {{"source", lua_database_source}}}},
+               response, false) || !response.value("ok", false) ||
+      frtk_bytes[0] != 0x34 || frtk_bytes[1] != 0x12) return 138;
   const std::vector<Json> invalid_reads{
       {{"generation", generation}, {"records", "not-an-array"}},
       {{"generation", generation}, {"records", Json::array()}, {"unexpected", true}},

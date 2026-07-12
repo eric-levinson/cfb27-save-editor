@@ -23,11 +23,12 @@ void Require(bool value, const char* message) {
 
 nlohmann::json Field(const char* name, const char* encoding, unsigned offset,
                      unsigned bytes, unsigned bit_offset, unsigned width,
-                     std::int64_t maximum) {
+                     std::int64_t maximum,
+                     std::optional<unsigned> target = std::nullopt) {
   return {{"name", name}, {"encoding", encoding}, {"byteOffset", offset},
           {"storageBytes", bytes}, {"bitOffset", bit_offset},
           {"bitWidth", width}, {"minimum", 0}, {"maximum", maximum},
-          {"referenceTableId", nullptr}};
+          {"referenceTableId", target ? nlohmann::json(*target) : nlohmann::json(nullptr)}};
 }
 
 ProfileBundle Bundle() {
@@ -47,7 +48,8 @@ ProfileBundle Bundle() {
            {"capacity", 2}, {"recordSize", 8}, {"authorityStatus", "direct_verified"},
            {"fields", nlohmann::json::array({
                Field("Score", "unsigned", 0, 2, 0, 16, 65535),
-               Field("Flags", "bitfield", 2, 1, 1, 3, 7)})}},
+               Field("Flags", "bitfield", 2, 1, 1, 3, 7),
+               Field("Link", "packed-reference", 4, 4, 0, 32, 0xFFFFFFFFll, 33)})}},
           {{"logicalName", "Recruit"}, {"tableId", 44}, {"uniqueId", 440044},
            {"capacity", 1}, {"recordSize", 8}, {"authorityStatus", "discovery_only"},
            {"fields", nlohmann::json::array({Field("Rank", "unsigned", 0, 2, 0, 16, 65535)})}}
@@ -117,7 +119,7 @@ void TestReadsErrorsAndInvalidation() {
   SessionCatalog catalog;
   catalog.Install(profile, Discovery());
   Backend backend;
-  backend.records[0x1000] = {0x34, 0x12, 0x0A, 0, 0, 0, 0, 0};
+  backend.records[0x1000] = {0x34, 0x12, 0x0A, 0, 1, 0, 66, 0};
   backend.records[0x1008] = {7, 0, 0, 0, 0, 0, 0, 0};
   backend.records[0x2000] = {9, 0, 0, 0, 0, 0, 0, 0};
   lua_State* state = luaL_newstate();
@@ -144,6 +146,10 @@ void TestReadsErrorsAndInvalidation() {
     direct = CFB27.db:GetTableByUniqueId(330033)
     local methods = debug.getmetatable(direct).__index
     assert(debug.getupvalue(methods.GetRecord, 1) == nil)
+    for _, value in ipairs({tostring(direct), tostring(direct:GetRecord(0))}) do
+      assert(not value:find("0x") and not value:find("userdata:") and
+             not value:match("%x%x%x%x%x%x%x%x"))
+    end
     assert(direct:GetRecord(0):GetField("Score") == 0x1234)
     assert(direct:GetRecord(0):GetField("Flags") == 5)
     assert(direct:GetRecord(1):GetField("Score") == 7)
@@ -171,7 +177,7 @@ void TestTransactions() {
   SessionCatalog catalog;
   catalog.Install(profile, Discovery());
   Backend backend;
-  backend.records[0x1000] = {1, 0, 0, 0, 0, 0, 0, 0};
+  backend.records[0x1000] = {1, 0, 0, 0, 1, 0, 66, 0};
   backend.records[0x1008] = std::vector<std::uint8_t>(8);
   backend.records[0x2000] = {9, 0, 0, 0, 0, 0, 0, 0};
   lua_State* state = luaL_newstate();
@@ -187,6 +193,9 @@ void TestTransactions() {
     local direct = CFB27.db:GetTableByUniqueId(330033)
     local record = direct:GetRecord(0)
     assert(CFB27.db:Transaction(function(tx)
+      local text = tostring(tx)
+      assert(not text:find("0x") and not text:find("userdata:") and
+             not text:match("%x%x%x%x%x%x%x%x"))
       tx:SetField(record, "Score", 42)
       tx:SetField(record, "Flags", 3)
     end) == true)
@@ -218,6 +227,18 @@ void TestTransactions() {
         assert(not pcall(function() tx:SetField(record, "Score", 7) end))
       end)
     end))
+    assert(record:GetField("Score") == 42)
+    local hostile_hits = 0
+    local hostile = setmetatable({}, {__index=function()
+      hostile_hits = hostile_hits + 1
+      error("hostile __index")
+    end})
+    assert(not pcall(function()
+      CFB27.db:Transaction(function(tx)
+        assert(not pcall(function() tx:SetField(record, "Link", hostile) end))
+      end)
+    end))
+    assert(hostile_hits == 0)
     assert(record:GetField("Score") == 42)
     assert(CFB27.db:Transaction(function(tx) tx:SetField(record, "Score", 8) end))
     assert(record:GetField("Score") == 8)

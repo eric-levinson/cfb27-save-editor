@@ -78,10 +78,13 @@ DecodedField CheckDecoded(lua_State* state, int index,
     return static_cast<std::int64_t>(value);
   }
   if (!lua_istable(state, index)) Fail("packed-reference value must be a table");
-  lua_getfield(state, index, "tableId");
+  const int table_index = lua_absindex(state, index);
+  lua_pushliteral(state, "tableId");
+  lua_rawget(state, table_index);
   const auto table_id = CheckUnsigned(state, -1, "reference tableId");
   lua_pop(state, 1);
-  lua_getfield(state, index, "row");
+  lua_pushliteral(state, "row");
+  lua_rawget(state, table_index);
   const auto row = CheckUnsigned(state, -1, "reference row");
   lua_pop(state, 1);
   if (table_id > std::numeric_limits<std::uint16_t>::max())
@@ -90,13 +93,31 @@ DecodedField CheckDecoded(lua_State* state, int index,
 }
 
 void CreateMetatable(lua_State* state, const char* name,
-                     lua_CFunction method, const char* method_name) {
+                     lua_CFunction method, const char* method_name,
+                     lua_CFunction to_string) {
   luaL_newmetatable(state, name);
+  lua_pushcfunction(state, to_string);
+  lua_setfield(state, -2, "__tostring");
   lua_newtable(state);
   lua_pushcfunction(state, method);
   lua_setfield(state, -2, method_name);
   lua_setfield(state, -2, "__index");
   lua_pop(state, 1);
+}
+
+int TableToString(lua_State* state) {
+  lua_pushliteral(state, "CFB27.db table");
+  return 1;
+}
+
+int RecordToString(lua_State* state) {
+  lua_pushliteral(state, "CFB27.db record");
+  return 1;
+}
+
+int TransactionToString(lua_State* state) {
+  lua_pushliteral(state, "CFB27.db transaction");
+  return 1;
 }
 
 }  // namespace
@@ -161,9 +182,10 @@ void LuaDatabaseApi::Register(lua_State* state) {
     state_ = state;
     Apis()[state] = this;
   }
-  CreateMetatable(state, kTableMetatable, GetRecord, "GetRecord");
-  CreateMetatable(state, kRecordMetatable, GetField, "GetField");
-  CreateMetatable(state, kTransactionMetatable, SetField, "SetField");
+  CreateMetatable(state, kTableMetatable, GetRecord, "GetRecord", TableToString);
+  CreateMetatable(state, kRecordMetatable, GetField, "GetField", RecordToString);
+  CreateMetatable(state, kTransactionMetatable, SetField, "SetField",
+                  TransactionToString);
 
   lua_getglobal(state, "CFB27");
   if (!lua_istable(state, -1)) {
