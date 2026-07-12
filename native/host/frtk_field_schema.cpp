@@ -192,6 +192,19 @@ TableSchema ParseTable(const json& table) {
     }
     result.fields.push_back(std::move(parsed));
   }
+  if (!std::is_sorted(
+          result.fields.begin(), result.fields.end(),
+          [](const FieldDefinition& left, const FieldDefinition& right) {
+            if (left.byte_offset != right.byte_offset) {
+              return left.byte_offset < right.byte_offset;
+            }
+            if (left.bit_offset != right.bit_offset) {
+              return left.bit_offset < right.bit_offset;
+            }
+            return left.name < right.name;
+          })) {
+    throw std::invalid_argument("Noncanonical field order");
+  }
   return result;
 }
 
@@ -218,6 +231,13 @@ bool SchemaRegistry::Load(const json& artifact, std::string* error) {
         throw std::invalid_argument("Duplicate table ID in layout");
       }
       parsed.tables_.push_back(std::move(parsed_table));
+    }
+    if (!std::is_sorted(
+            parsed.tables_.begin(), parsed.tables_.end(),
+            [](const TableSchema& left, const TableSchema& right) {
+              return left.table_id < right.table_id;
+            })) {
+      throw std::invalid_argument("Noncanonical layout table order");
     }
     for (const auto& table : parsed.tables_) {
       for (const auto& field : table.fields) {

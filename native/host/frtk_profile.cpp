@@ -2,7 +2,17 @@
 
 #include <nlohmann/json.hpp>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <bcrypt.h>
+
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cctype>
 #include <limits>
@@ -68,6 +78,49 @@ std::vector<std::uint8_t> DecodeHex(const std::string& value) {
     result.push_back(
         static_cast<std::uint8_t>((nibble(value[index]) << 4) |
                                   nibble(value[index + 1])));
+  }
+  return result;
+}
+
+std::string Sha256Upper(std::string_view content) {
+  BCRYPT_ALG_HANDLE algorithm = nullptr;
+  BCRYPT_HASH_HANDLE hash = nullptr;
+  DWORD object_size = 0;
+  DWORD received = 0;
+  std::vector<std::uint8_t> object;
+  std::array<std::uint8_t, 32> digest{};
+  const auto cleanup = [&] {
+    if (hash) BCryptDestroyHash(hash);
+    if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
+  };
+  if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr,
+                                  0) < 0 ||
+      BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
+                        reinterpret_cast<PUCHAR>(&object_size),
+                        sizeof(object_size), &received, 0) < 0) {
+    cleanup();
+    throw std::runtime_error("Unable to initialize SHA-256");
+  }
+  object.resize(object_size);
+  if (BCryptCreateHash(algorithm, &hash, object.data(), object_size, nullptr, 0,
+                       0) < 0 ||
+      content.size() > std::numeric_limits<ULONG>::max() ||
+      BCryptHashData(
+          hash,
+          reinterpret_cast<PUCHAR>(const_cast<char*>(content.data())),
+          static_cast<ULONG>(content.size()), 0) < 0 ||
+      BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()),
+                       0) < 0) {
+    cleanup();
+    throw std::runtime_error("Unable to compute SHA-256");
+  }
+  cleanup();
+  constexpr char kHex[] = "0123456789ABCDEF";
+  std::string result;
+  result.reserve(digest.size() * 2);
+  for (const auto byte : digest) {
+    result.push_back(kHex[byte >> 4]);
+    result.push_back(kHex[byte & 0x0F]);
   }
   return result;
 }
@@ -156,6 +209,13 @@ TableProfile ParseTable(const json& table) {
     throw std::invalid_argument(
         "Each table requires at least three distinct occupied rows");
   }
+  if (!std::is_sorted(
+          result.rows.begin(), result.rows.end(),
+          [](const RowFingerprint& left, const RowFingerprint& right) {
+            return left.row_index < right.row_index;
+          })) {
+    throw std::invalid_argument("Noncanonical row order");
+  }
 
   std::set<std::pair<std::uint32_t, std::string>> relationship_ids;
   for (const auto& relationship : table.at("relationships")) {
@@ -165,6 +225,17 @@ TableProfile ParseTable(const json& table) {
           "Duplicate relationship source field identity");
     }
     result.relationships.push_back(std::move(parsed));
+  }
+  if (!std::is_sorted(
+          result.relationships.begin(), result.relationships.end(),
+          [](const RelationshipConstraint& left,
+             const RelationshipConstraint& right) {
+            if (left.source_row != right.source_row) {
+              return left.source_row < right.source_row;
+            }
+            return left.field_name < right.field_name;
+          })) {
+    throw std::invalid_argument("Noncanonical relationship order");
   }
   return result;
 }
@@ -225,6 +296,13 @@ ProfileValidationResult ParseProfile(const json& artifact) {
       }
       bundle.tables.push_back(std::move(parsed));
     }
+    if (!std::is_sorted(
+            bundle.tables.begin(), bundle.tables.end(),
+            [](const TableProfile& left, const TableProfile& right) {
+              return left.table_id < right.table_id;
+            })) {
+      throw std::invalid_argument("Noncanonical profile table order");
+    }
     if (bundle.tables.size() != bundle.schema.tables().size()) {
       throw std::invalid_argument("Profile/layout table identity mismatch");
     }
@@ -248,6 +326,11 @@ ProfileValidationResult ParseProfile(const json& artifact) {
               "Relationship target row exceeds target table capacity");
         }
       }
+    }
+    auto hash_content = profile;
+    hash_content.erase("profileId");
+    if (Sha256Upper(hash_content.dump()) != bundle.profile_id) {
+      throw std::invalid_argument("Profile ID does not match canonical content");
     }
     return {.bundle = std::move(bundle), .error = {}};
   } catch (const std::exception& exception) {

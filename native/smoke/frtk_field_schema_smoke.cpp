@@ -111,6 +111,17 @@ void TestSchemaRegistry() {
   auto authority = ValidLayout();
   authority["tables"][0]["authorityStatus"] = "verified-ish";
   Require(!registry.Load(authority, &error), "unknown authority accepted");
+  auto table_order = ValidLayout();
+  std::swap(table_order["tables"][0], table_order["tables"][1]);
+  Require(!registry.Load(table_order, &error) &&
+              error.find("table order") != std::string::npos,
+          "noncanonical layout table order accepted");
+  auto field_order = ValidLayout();
+  auto& fields = field_order["tables"][1]["fields"];
+  std::swap(fields[0], fields[1]);
+  Require(!registry.Load(field_order, &error) &&
+              error.find("field order") != std::string::npos,
+          "noncanonical field order accepted");
 }
 
 void TestPackedReferences() {

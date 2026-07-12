@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -58,6 +59,10 @@ json ValidBundle() {
        {"byteOffset", 0}, {"storageBytes", 4}, {"bitOffset", 0},
        {"bitWidth", 32}, {"minimum", 0}, {"maximum", 0xFFFFFFFFull},
        {"referenceTableId", 4269}},
+      {{"name", "CrossByte"}, {"encoding", "bitfield"},
+       {"byteOffset", 4}, {"storageBytes", 2}, {"bitOffset", 5},
+       {"bitWidth", 7}, {"minimum", 0}, {"maximum", 127},
+       {"referenceTableId", nullptr}},
   });
   auto target_layout = Table("Recruit", 4269, 426907, 80, 8);
   target_layout["authorityStatus"] = "discovery_only";
@@ -71,7 +76,7 @@ json ValidBundle() {
   return {
       {"profile",
        {{"formatVersion", 1},
-        {"profileId", std::string(64, 'A')},
+        {"profileId", "1BA61F9965B24AC83659AC04E7969A99CCCC8161610545B379F4FD219A43BB76"},
         {"schemaIdentity", "synthetic-schema-v1"},
         {"buildIdentity", "synthetic-build-v1"},
         {"tables", json::array({target, source})}}},
@@ -88,10 +93,19 @@ void RequireRejected(const json& value, const char* message) {
   Require(!result.ok() && !result.error.empty(), message);
 }
 
+void RequireRejectedContaining(const json& value, std::string_view expected,
+                               const char* message) {
+  const auto result = cfb27::frtk::ParseProfile(value);
+  Require(!result.ok() && result.error.find(expected) != std::string::npos,
+          message);
+}
+
 void TestValidProfile() {
   const auto result = cfb27::frtk::ParseProfile(ValidBundle());
   Require(result.ok(), result.error.c_str());
-  Require(result.bundle->profile_id == std::string(64, 'A'), "profile ID lost");
+  Require(result.bundle->profile_id ==
+              "1BA61F9965B24AC83659AC04E7969A99CCCC8161610545B379F4FD219A43BB76",
+          "profile ID lost");
   Require(result.bundle->tables.size() == 2, "table count mismatch");
   Require(result.bundle->tables[0].table_id == 4269, "table order changed");
   Require(result.bundle->tables[1].rows[1].row_index == 19, "row order changed");
@@ -153,6 +167,65 @@ void TestRows() {
   auto bounds = ValidBundle();
   bounds["profile"]["tables"][0]["rows"][0]["rowIndex"] = 80;
   RequireRejected(bounds, "row outside capacity accepted");
+  auto weak_mask = ValidBundle();
+  auto& weak_rows = weak_mask["profile"]["tables"][0]["rows"];
+  for (std::size_t index = 0; index < weak_rows.size(); ++index) {
+    weak_rows[index]["maskHex"] = "0300000000000000";
+    weak_rows[index]["patternHex"] =
+        std::string("0") + std::to_string(index + 1) + "00000000000000";
+  }
+  RequireRejectedContaining(weak_mask, "64 selected bits",
+                            "weak mask did not reach aggregate gate");
+}
+
+void TestProfileIdIntegrity() {
+  auto mutation = ValidBundle();
+  mutation["profile"]["tables"][0]["rows"][0]["patternHex"] =
+      "3132333435363739";
+  RequireRejectedContaining(mutation, "Profile ID",
+                            "mutated content retained a stale profile ID");
+}
+
+void TestCanonicalOrdering() {
+  auto tables = ValidBundle();
+  auto& profile_tables = tables["profile"]["tables"];
+  std::swap(profile_tables[0], profile_tables[1]);
+  tables["profile"]["profileId"] =
+      "20E3775956F879921C4883FEAEBE80AE9BEEFAAF70B2996FBBD966B80D2D192F";
+  RequireRejectedContaining(tables, "table order",
+                            "noncanonical profile table order accepted");
+
+  auto rows = ValidBundle();
+  auto& target_rows = rows["profile"]["tables"][0]["rows"];
+  std::swap(target_rows[0], target_rows[1]);
+  rows["profile"]["profileId"] =
+      "4982F834FBEA9CF80B45F1C51CE25DE692C9E45558C0DF3A3CA619D6405CD4C7";
+  RequireRejectedContaining(rows, "row order",
+                            "noncanonical row order accepted");
+
+  auto relationships = ValidBundle();
+  relationships["profile"]["tables"][1]["relationships"] = json::array({
+      {{"sourceRow", 19}, {"fieldName", "SchoolRef"},
+       {"targetTableId", 4269}, {"targetRow", 19}},
+      {{"sourceRow", 19}, {"fieldName", "RecruitRef"},
+       {"targetTableId", 4269}, {"targetRow", 37}},
+  });
+  relationships["profile"]["profileId"] =
+      "F8F2D35A6B8FC420AC88079CD0FF66A8DE6EE993766AB295605E1DFB81C4EAFF";
+  RequireRejectedContaining(relationships, "relationship order",
+                            "noncanonical relationship order accepted");
+
+  auto layout_tables = ValidBundle();
+  auto& schema_tables = layout_tables["layout"]["tables"];
+  std::swap(schema_tables[0], schema_tables[1]);
+  RequireRejectedContaining(layout_tables, "table order",
+                            "noncanonical layout table order accepted");
+
+  auto fields = ValidBundle();
+  auto& source_fields = fields["layout"]["tables"][1]["fields"];
+  std::swap(source_fields[0], source_fields[1]);
+  RequireRejectedContaining(fields, "field order",
+                            "noncanonical field order accepted");
 }
 
 void TestDuplicatesAndRelationships() {
@@ -180,6 +253,8 @@ int main() {
     TestExactKeysAndVersions();
     TestIdentityAndTableIdentity();
     TestRows();
+    TestProfileIdIntegrity();
+    TestCanonicalOrdering();
     TestDuplicatesAndRelationships();
     std::cout << "frtk profile smoke passed\n";
     return 0;
