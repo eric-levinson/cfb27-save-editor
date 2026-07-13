@@ -51,6 +51,12 @@ class SessionCatalog {
   [[nodiscard]] bool IsActiveReferenceTarget(
       std::uint16_t session_table_id, std::uint32_t row,
       std::uint64_t generation) const;
+  [[nodiscard]] std::optional<std::uint32_t> ActiveUniqueId(
+      std::uint16_t session_table_id, std::uint32_t row,
+      std::uint64_t generation) const;
+  [[nodiscard]] std::optional<std::uint16_t> ActiveTableId(
+      std::uint32_t unique_id, std::uint32_t row,
+      std::uint64_t generation) const;
 
   [[nodiscard]] std::vector<CatalogSummary> Summaries() const;
   [[nodiscard]] std::uint64_t generation() const { return generation_; }

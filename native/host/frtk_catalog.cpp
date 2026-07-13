@@ -268,6 +268,37 @@ bool SessionCatalog::IsActiveReferenceTarget(
   return target != entries_.end() && row < target->descriptor.capacity;
 }
 
+std::optional<std::uint32_t> SessionCatalog::ActiveUniqueId(
+    std::uint16_t session_table_id, std::uint32_t row,
+    std::uint64_t generation) const {
+  if (generation != generation_) return std::nullopt;
+  const auto found = std::find_if(entries_.begin(), entries_.end(),
+                                  [&](const Entry& entry) {
+    return entry.descriptor.session_table_id == session_table_id &&
+           entry.descriptor.lifecycle_generation == generation_ &&
+           row < entry.descriptor.capacity;
+  });
+  return found == entries_.end()
+             ? std::nullopt
+             : std::optional<std::uint32_t>(found->descriptor.unique_id);
+}
+
+std::optional<std::uint16_t> SessionCatalog::ActiveTableId(
+    std::uint32_t unique_id, std::uint32_t row,
+    std::uint64_t generation) const {
+  if (generation != generation_) return std::nullopt;
+  const auto found = std::find_if(entries_.begin(), entries_.end(),
+                                  [&](const Entry& entry) {
+    return entry.descriptor.unique_id == unique_id &&
+           entry.descriptor.lifecycle_generation == generation_ &&
+           row < entry.descriptor.capacity;
+  });
+  return found == entries_.end()
+             ? std::nullopt
+             : std::optional<std::uint16_t>(
+                   found->descriptor.session_table_id);
+}
+
 std::vector<CatalogSummary> SessionCatalog::Summaries() const {
   std::vector<CatalogSummary> result;
   result.reserve(entries_.size());

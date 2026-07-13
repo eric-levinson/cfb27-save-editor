@@ -25,7 +25,11 @@ generation. Every method resolves that handle again, so lifecycle invalidation
 makes retained values stale instead of retaining a process address. Rows are
 zero-based and bounds checked. Fields come from the table's complete installed
 schema layout; numeric primitives and bitfields return Lua integers, while a
-packed reference returns `{ tableId = ..., row = ... }`.
+packed reference returns `{ uniqueId = ..., row = ... }`. Packed references
+accept that exact public shape on write; current-build table IDs are resolved
+only inside typed decoding and write planning and are never accepted from Lua.
+References whose Unique ID or decoded build-local target is not active in the
+current catalog fail closed.
 
 `Transaction` records typed changes during its callback, rejects nesting and
 duplicate changes to the same record field, rereads complete records, and

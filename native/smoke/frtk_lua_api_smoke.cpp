@@ -36,8 +36,10 @@ ProfileBundle Bundle() {
   result.profile_id = "lua-api-profile";
   result.tables = {
       {.logical_name = "Direct", .table_id = 33, .unique_id = 330033,
-       .capacity = 2, .record_size = 8},
+       .capacity = 2, .record_size = 12},
       {.logical_name = "Recruit", .table_id = 44, .unique_id = 440044,
+       .capacity = 1, .record_size = 8},
+      {.logical_name = "Inactive", .table_id = 55, .unique_id = 550055,
        .capacity = 1, .record_size = 8}};
   std::string error;
   const auto schema = nlohmann::json{
@@ -45,14 +47,19 @@ ProfileBundle Bundle() {
       {"buildIdentity", "lua-api-build"},
       {"tables", nlohmann::json::array({
           {{"logicalName", "Direct"}, {"tableId", 33}, {"uniqueId", 330033},
-           {"capacity", 2}, {"recordSize", 8}, {"authorityStatus", "direct_verified"},
+           {"capacity", 2}, {"recordSize", 12}, {"authorityStatus", "direct_verified"},
            {"fields", nlohmann::json::array({
                Field("Score", "unsigned", 0, 2, 0, 16, 65535),
                Field("Flags", "bitfield", 2, 1, 1, 3, 7),
-               Field("Link", "packed-reference", 4, 4, 0, 32, 0xFFFFFFFFll, 33)})}},
+               Field("Link", "packed-reference", 4, 4, 0, 32, 0xFFFFFFFFll, 33),
+               Field("InactiveLink", "packed-reference", 8, 4, 0, 32,
+                     0xFFFFFFFFll, 55)})}},
           {{"logicalName", "Recruit"}, {"tableId", 44}, {"uniqueId", 440044},
            {"capacity", 1}, {"recordSize", 8}, {"authorityStatus", "discovery_only"},
-           {"fields", nlohmann::json::array({Field("Rank", "unsigned", 0, 2, 0, 16, 65535)})}}
+           {"fields", nlohmann::json::array({Field("Rank", "unsigned", 0, 2, 0, 16, 65535)})}},
+          {{"logicalName", "Inactive"}, {"tableId", 55}, {"uniqueId", 550055},
+           {"capacity", 1}, {"recordSize", 8}, {"authorityStatus", "discovery_only"},
+           {"fields", nlohmann::json::array({Field("Value", "unsigned", 0, 2, 0, 16, 65535)})}}
       })}};
   Require(result.schema.LoadTrustedForTesting(schema, &error), error.c_str());
   return result;
@@ -62,8 +69,8 @@ DiscoveryResult Discovery() {
   return {.tables = {
       {.unique_id = 330033, .state = TableState::kResolved,
        .descriptor = TableDescriptor{.unique_id = 330033, .base = 0x1000,
-          .stride = 8, .capacity = 2, .allocation_base = 0x1000,
-          .allocation_size = 16}},
+          .stride = 12, .capacity = 2, .allocation_base = 0x1000,
+          .allocation_size = 24}},
       {.unique_id = 440044, .state = TableState::kResolved,
        .descriptor = TableDescriptor{.unique_id = 440044, .base = 0x2000,
           .stride = 8, .capacity = 1, .allocation_base = 0x2000,
@@ -119,8 +126,9 @@ void TestReadsErrorsAndInvalidation() {
   SessionCatalog catalog;
   catalog.Install(profile, Discovery());
   Backend backend;
-  backend.records[0x1000] = {0x34, 0x12, 0x0A, 0, 1, 0, 66, 0};
-  backend.records[0x1008] = {7, 0, 0, 0, 0, 0, 0, 0};
+  backend.records[0x1000] = {0x34, 0x12, 0x0A, 0, 1, 0, 66, 0,
+                             0, 0, 110, 0};
+  backend.records[0x100C] = {7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   backend.records[0x2000] = {9, 0, 0, 0, 0, 0, 0, 0};
   lua_State* state = luaL_newstate();
   luaL_openlibs(state);
@@ -152,6 +160,9 @@ void TestReadsErrorsAndInvalidation() {
     end
     assert(direct:GetRecord(0):GetField("Score") == 0x1234)
     assert(direct:GetRecord(0):GetField("Flags") == 5)
+    local link = direct:GetRecord(0):GetField("Link")
+    assert(link.uniqueId == 330033 and link.row == 1 and link.tableId == nil)
+    assert(not pcall(function() direct:GetRecord(0):GetField("InactiveLink") end))
     assert(direct:GetRecord(1):GetField("Score") == 7)
     assert(direct.address == nil and direct.baseAddress == nil)
     stale_record = direct:GetRecord(0)
@@ -163,7 +174,7 @@ void TestReadsErrorsAndInvalidation() {
     assert(not pcall(function() record:GetField("Missing") end))
     assert(not pcall(function() record:GetField(7) end))
   )lua");
-  Require(backend.reads == 3, "field reads did not use one complete record snapshot each");
+  Require(backend.reads == 5, "field reads did not use one complete record snapshot each");
   catalog.Invalidate();
   Run(state, R"lua(
     assert(not pcall(function() direct:GetRecord(0) end))
@@ -177,8 +188,8 @@ void TestTransactions() {
   SessionCatalog catalog;
   catalog.Install(profile, Discovery());
   Backend backend;
-  backend.records[0x1000] = {1, 0, 0, 0, 1, 0, 66, 0};
-  backend.records[0x1008] = std::vector<std::uint8_t>(8);
+  backend.records[0x1000] = {1, 0, 0, 0, 1, 0, 66, 0, 0, 0, 110, 0};
+  backend.records[0x100C] = std::vector<std::uint8_t>(12);
   backend.records[0x2000] = {9, 0, 0, 0, 0, 0, 0, 0};
   lua_State* state = luaL_newstate();
   luaL_openlibs(state);
@@ -228,6 +239,26 @@ void TestTransactions() {
       end)
     end))
     assert(record:GetField("Score") == 42)
+    assert(CFB27.db:Transaction(function(tx)
+      tx:SetField(record, "Link", {uniqueId=330033, row=0})
+    end))
+    local link = record:GetField("Link")
+    assert(link.uniqueId == 330033 and link.row == 0 and link.tableId == nil)
+    assert(not pcall(function()
+      CFB27.db:Transaction(function(tx)
+        assert(not pcall(function()
+          tx:SetField(record, "Link", {tableId=33, row=0})
+        end))
+      end)
+    end))
+    assert(record:GetField("Link").row == 0)
+    assert(not pcall(function()
+      CFB27.db:Transaction(function(tx)
+        assert(not pcall(function()
+          tx:SetField(record, "InactiveLink", {uniqueId=550055, row=0})
+        end))
+      end)
+    end))
     local hostile_hits = 0
     local hostile = setmetatable({}, {__index=function()
       hostile_hits = hostile_hits + 1
@@ -240,6 +271,15 @@ void TestTransactions() {
     end))
     assert(hostile_hits == 0)
     assert(record:GetField("Score") == 42)
+    local hostile_ref = setmetatable({uniqueId=330033, row=1}, {
+      __index=function() hostile_hits = hostile_hits + 1; error("hostile __index") end,
+      __pairs=function() hostile_hits = hostile_hits + 1; error("hostile __pairs") end,
+      __len=function() hostile_hits = hostile_hits + 1; error("hostile __len") end
+    })
+    assert(CFB27.db:Transaction(function(tx)
+      tx:SetField(record, "Link", hostile_ref)
+    end))
+    assert(hostile_hits == 0 and record:GetField("Link").row == 1)
     assert(CFB27.db:Transaction(function(tx) tx:SetField(record, "Score", 8) end))
     assert(record:GetField("Score") == 8)
   )lua");
