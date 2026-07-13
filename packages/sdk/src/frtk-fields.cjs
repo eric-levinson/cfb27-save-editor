@@ -40,7 +40,7 @@ function normalizeDefinition(record, definition) {
       bitOffset + bitWidth > storageBytes * 8) {
     throw new RangeError('Field bit range exceeds its storage');
   }
-  if (!['unsigned', 'signed', 'bitfield', 'packed-reference'].includes(encoding)) {
+  if (!['unsigned', 'signed', 'offset-binary', 'bitfield', 'packed-reference'].includes(encoding)) {
     throw new TypeError(`Unsupported field encoding: ${encoding}`);
   }
   if (encoding === 'packed-reference' && (storageBytes !== 4 || bitOffset !== 0 || bitWidth !== 32)) {
@@ -48,14 +48,19 @@ function normalizeDefinition(record, definition) {
   }
   const signedMinimum = -(2 ** (bitWidth - 1));
   const signedMaximum = (2 ** (bitWidth - 1)) - 1;
-  const legalMinimum = encoding === 'signed' ? signedMinimum : 0;
-  const legalMaximum = encoding === 'signed' ? signedMaximum : Number((1n << BigInt(bitWidth)) - 1n);
+  const isOffsetBinary = encoding === 'offset-binary';
+  const legalMinimum = encoding === 'signed' ? signedMinimum : isOffsetBinary ? Number.MIN_SAFE_INTEGER : 0;
+  const legalMaximum = encoding === 'signed' ? signedMaximum : isOffsetBinary ? Number.MAX_SAFE_INTEGER : Number((1n << BigInt(bitWidth)) - 1n);
   if (!isSafeIntegerBetween(definition.minimum, legalMinimum, legalMaximum) ||
       !isSafeIntegerBetween(definition.maximum, legalMinimum, legalMaximum) ||
       definition.minimum > definition.maximum) {
     throw new RangeError(encoding === 'signed'
       ? 'Definition declares an illegal signed range'
       : 'Definition declares an illegal unsigned range');
+  }
+  if (isOffsetBinary &&
+      BigInt(definition.maximum) - BigInt(definition.minimum) >= (1n << BigInt(bitWidth))) {
+    throw new RangeError('Definition declares an illegal offset-binary range');
   }
   return { byteOffset, storageBytes, bitOffset, bitWidth, encoding };
 }
@@ -80,6 +85,7 @@ function decodeField(record, definition) {
   const normalized = normalizeDefinition(record, definition);
   const raw = extractRaw(record, normalized);
   if (normalized.encoding === 'packed-reference') return decodePackedReference(Number(raw));
+  if (normalized.encoding === 'offset-binary') return Number(raw) + definition.minimum;
   if (normalized.encoding !== 'signed') return Number(raw);
   const sign = 1n << BigInt(normalized.bitWidth - 1);
   return Number((raw & sign) === 0n ? raw : raw - (1n << BigInt(normalized.bitWidth)));
@@ -99,7 +105,10 @@ function encodeField(record, definition, value) {
     throw new RangeError('Field value is outside its declared bounds');
   }
   const width = BigInt(normalized.bitWidth);
-  const raw = numericValue < 0 ? (1n << width) + BigInt(numericValue) : BigInt(numericValue);
+  const storedValue = normalized.encoding === 'offset-binary'
+    ? numericValue - definition.minimum
+    : numericValue;
+  const raw = storedValue < 0 ? (1n << width) + BigInt(storedValue) : BigInt(storedValue);
   const shift = BigInt((normalized.storageBytes * 8) - normalized.bitOffset -
     normalized.bitWidth);
   const fieldMask = ((1n << width) - 1n) << shift;

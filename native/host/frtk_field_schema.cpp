@@ -123,6 +123,7 @@ void ValidateDefinition(std::span<const std::uint8_t> record,
   }
   const bool supported = definition.encoding == "unsigned" ||
                          definition.encoding == "signed" ||
+                         definition.encoding == "offset-binary" ||
                          definition.encoding == "bitfield" ||
                          definition.encoding == "packed-reference";
   if (!supported) {
@@ -135,21 +136,31 @@ void ValidateDefinition(std::span<const std::uint8_t> record,
     throw std::range_error(
         "Packed-reference fields must occupy exactly 32 bits");
   }
+  const bool is_offset_binary = definition.encoding == "offset-binary";
   const std::int64_t legal_minimum =
       definition.encoding == "signed"
           ? -(std::int64_t{1} << (definition.bit_width - 1))
-          : 0;
+          : is_offset_binary ? (std::numeric_limits<std::int64_t>::min)() : 0;
   const std::int64_t legal_maximum =
       definition.encoding == "signed"
           ? (std::int64_t{1} << (definition.bit_width - 1)) - 1
-          : static_cast<std::int64_t>(
-                (std::uint64_t{1} << definition.bit_width) - 1);
+          : is_offset_binary
+                ? (std::numeric_limits<std::int64_t>::max)()
+                : static_cast<std::int64_t>(
+                      (std::uint64_t{1} << definition.bit_width) - 1);
   if (definition.minimum < legal_minimum ||
       definition.maximum > legal_maximum ||
       definition.minimum > definition.maximum) {
     throw std::range_error(definition.encoding == "signed"
                                ? "Definition declares an illegal signed range"
                                : "Definition declares an illegal unsigned range");
+  }
+  if (is_offset_binary &&
+      static_cast<std::uint64_t>(definition.maximum) -
+              static_cast<std::uint64_t>(definition.minimum) >=
+          (std::uint64_t{1} << definition.bit_width)) {
+    throw std::range_error(
+        "Definition declares an illegal offset-binary range");
   }
 }
 
@@ -379,6 +390,9 @@ DecodedField DecodeField(std::span<const std::uint8_t> record,
   if (definition.encoding == "packed-reference") {
     return DecodePackedReference(raw);
   }
+  if (definition.encoding == "offset-binary") {
+    return static_cast<std::int64_t>(raw) + definition.minimum;
+  }
   if (definition.encoding != "signed") {
     return static_cast<std::int64_t>(raw);
   }
@@ -414,10 +428,13 @@ std::vector<std::uint8_t> EncodeField(
   }
   const std::uint64_t width_mask =
       (std::uint64_t{1} << definition.bit_width) - 1;
-  const std::uint64_t raw = numeric_value < 0
+  const std::int64_t stored_value = definition.encoding == "offset-binary"
+                                        ? numeric_value - definition.minimum
+                                        : numeric_value;
+  const std::uint64_t raw = stored_value < 0
                                 ? (std::uint64_t{1} << definition.bit_width) +
-                                      numeric_value
-                                : static_cast<std::uint64_t>(numeric_value);
+                                      stored_value
+                                : static_cast<std::uint64_t>(stored_value);
   const auto shift = definition.storage_bytes * 8 - definition.bit_offset -
                      definition.bit_width;
   const std::uint64_t field_mask = width_mask << shift;

@@ -88,6 +88,10 @@ ProfileBundle Bundle() {
            {"capacity", 2}, {"recordSize", 12}, {"authorityStatus", "direct_verified"},
            {"fields", nlohmann::json::array({
                Field("Score", "unsigned", 0, 2, 0, 16, 65535),
+               {{"name", "ZBias"}, {"encoding", "offset-binary"},
+                {"byteOffset", 0}, {"storageBytes", 2}, {"bitOffset", 0},
+                {"bitWidth", 11}, {"minimum", -200}, {"maximum", 1847},
+                {"referenceTableId", nullptr}},
                Field("Flags", "bitfield", 2, 1, 1, 3, 7),
                Field("Link", "packed-reference", 4, 4, 0, 32, 0xFFFFFFFFll, 33),
                Field("InactiveLink", "packed-reference", 8, 4, 0, 32,
@@ -215,6 +219,7 @@ void TestReadsErrorsAndInvalidation() {
              not value:match("%x%x%x%x%x%x%x%x"))
     end
     assert(direct:GetRecord(0):GetField("Score") == 0x1234)
+    assert(direct:GetRecord(0):GetField("ZBias") == -55)
     assert(direct:GetRecord(0):GetField("Flags") == 5)
     local link = direct:GetRecord(0):GetField("Link")
     assert(link.uniqueId == 330033 and link.row == 1 and link.tableId == nil)
@@ -230,7 +235,7 @@ void TestReadsErrorsAndInvalidation() {
     assert(not pcall(function() record:GetField("Missing") end))
     assert(not pcall(function() record:GetField(7) end))
   )lua");
-  Require(backend.reads == 5, "field reads did not use one complete record snapshot each");
+  Require(backend.reads == 6, "field reads did not use one complete record snapshot each");
   catalog.Invalidate();
   Run(state, R"lua(
     assert(not pcall(function() direct:GetRecord(0) end))
@@ -345,6 +350,8 @@ void TestTransactions() {
     assert(hostile_hits == 0 and record:GetField("Link").row == 1)
     assert(CFB27.db:Transaction(function(tx) tx:SetField(record, "Score", 8) end))
     assert(record:GetField("Score") == 8)
+    assert(CFB27.db:Transaction(function(tx) tx:SetField(record, "ZBias", 26) end))
+    assert(record:GetField("ZBias") == 26)
   )lua");
   Require(saw_verify_only_guard,
           "Lua typed transaction omitted native catalog evidence guards");

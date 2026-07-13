@@ -82,7 +82,9 @@ const FRTK_ERROR_MESSAGES = Object.freeze({
   PROTOCOL_MISMATCH: 'Host protocol version does not match',
 });
 const FRTK_AUTHORITY = new Set(['discovery_only', 'commit_adapter_required', 'direct_verified']);
-const FRTK_FIELD_ENCODINGS = new Set(['unsigned', 'signed', 'bitfield', 'packed-reference']);
+const FRTK_FIELD_ENCODINGS = new Set([
+  'unsigned', 'signed', 'offset-binary', 'bitfield', 'packed-reference',
+]);
 const FRTK_REASONS = new Set(['caller_transition', 'save_changed', 'shutdown']);
 const FRTK_TRANSACTION_ID = /^[A-Za-z0-9._-]{1,64}$/;
 

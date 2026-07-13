@@ -45,6 +45,10 @@ ProfileBundle Bundle(const char* authority) {
          {"fields", nlohmann::json::array({
            Field("Flags", "bitfield", 0, 1, 2, 3, 7),
            Field("Score", "unsigned", 1, 2, 0, 16, 65535),
+           {{"name", "ZBias"}, {"encoding", "offset-binary"},
+            {"byteOffset", 1}, {"storageBytes", 2}, {"bitOffset", 0},
+            {"bitWidth", 11}, {"minimum", -200}, {"maximum", 1847},
+            {"referenceTableId", nullptr}},
            Field("Other", "unsigned", 3, 2, 0, 16, 65535),
            Field("TargetRef", "packed-reference", 4, 4, 0, 32, 0xFFFFFFFFll, 22)
          })}}
@@ -259,6 +263,29 @@ void TestPlansAndAuthority() {
           "external schema escalated installed table authority");
 }
 
+void TestOffsetBinaryTypedAccess() {
+  auto profile = Bundle("direct_verified");
+  SessionCatalog catalog;
+  catalog.Install(profile, Discovery());
+  Backend backend;
+  backend.records[0x2000] = {0xA1, 0x1C, 0x54, 0, 0, 44, 0, 2};
+  RecordAccessor accessor(catalog, profile.schema, backend, backend);
+  const auto handle = *catalog.GetHandle(330033);
+  const auto read = accessor.ReadFields(handle, 0, {"ZBias"});
+  Require(read.ok && std::get<std::int64_t>(read.fields[0].value) == 26,
+          "typed read did not format offset-binary raw 226");
+
+  backend.records[0x2000] = {0xA1, 0x12, 0x34, 0, 0, 44, 0, 2};
+  const auto plan = accessor.PlanFieldWrites(
+      handle, 0, {{"ZBias", std::int64_t{26}}});
+  Require(plan.ok && plan.operations.size() == 1 &&
+              plan.operations[0].expected ==
+                  std::vector<std::uint8_t>({0x12, 0x34}) &&
+              plan.operations[0].replacement ==
+                  std::vector<std::uint8_t>({0x1C, 0x54}),
+          "typed write did not plan biased raw 226 while preserving outer bits");
+}
+
 void TestPackedReferenceRequiresActiveTarget() {
   auto profile = Bundle("direct_verified");
   profile.tables[0].rows = {
@@ -392,6 +419,7 @@ int main() {
     TestReadsAndValidation();
     TestPackedReferenceRequiresActiveTarget();
     TestPlansAndAuthority();
+    TestOffsetBinaryTypedAccess();
     TestEvidenceBoundTransactionRejectsStaleReadableCopy();
     TestEvidenceMergeMultiRecordAndGeneration();
     TestEvidenceLimitsFailDuringFinalization();

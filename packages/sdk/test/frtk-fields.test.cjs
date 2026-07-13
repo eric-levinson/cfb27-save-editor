@@ -137,6 +137,26 @@ test('signed 11-bit fields round trip their legal extremes', () => {
   assert.throws(() => encodeField(Buffer.alloc(3), definition, -1025), /bounds|range/i);
 });
 
+test('offset-binary 11-bit fields add the declared minimum and preserve outer bits', () => {
+  const definition = {
+    name: 'FormattedScore', encoding: 'offset-binary', byteOffset: 1,
+    storageBytes: 2, bitOffset: 2, bitWidth: 11, minimum: -200, maximum: 1847,
+  };
+  const original = syntheticRecord(4, 0x6B);
+  const expected = encodeMsbFirstOracle(original, definition, 226);
+  const encoded = encodeField(original, definition, 26);
+  assert.deepEqual(encoded, expected);
+  assert.equal(decodeField(expected, definition), 26);
+  assert.equal(encoded[1] & 0xC0, original[1] & 0xC0);
+  assert.equal(encoded[2] & 0x07, original[2] & 0x07);
+
+  for (const value of [-17, 0, definition.maximum]) {
+    assert.equal(decodeField(encodeField(original, definition, value), definition), value);
+  }
+  assert.throws(() => encodeField(original, definition, -201), /bounds/i);
+  assert.throws(() => decodeField(original, { ...definition, maximum: 1848 }), /offset-binary range/i);
+});
+
 test('unsigned and packed-reference fields enforce definitions and record bounds', () => {
   const unsigned = {
     name: 'Count', encoding: 'unsigned', byteOffset: 0,

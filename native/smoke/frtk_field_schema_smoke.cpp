@@ -171,6 +171,14 @@ void TestSchemaRegistry() {
   auto unsupported = ValidLayout();
   unsupported["tables"][1]["fields"][1]["encoding"] = "float";
   Require(!registry.LoadTrustedForTesting(unsupported, &error), "unsupported encoding accepted");
+  auto offset_binary = ValidLayout();
+  offset_binary["tables"][0]["fields"][0] =
+      Field("Score", "offset-binary", 4, 2, 2, 11, -200, 1847);
+  Require(registry.LoadTrustedForTesting(offset_binary, &error),
+          "exact offset-binary encoding rejected");
+  offset_binary["tables"][0]["fields"][0]["encoding"] = "offset_binary";
+  Require(!registry.LoadTrustedForTesting(offset_binary, &error),
+          "misspelled offset-binary encoding accepted");
   auto authority = ValidLayout();
   authority["tables"][0]["authorityStatus"] = "verified-ish";
   Require(!registry.LoadTrustedForTesting(authority, &error), "unknown authority accepted");
@@ -256,6 +264,38 @@ void TestFieldCodecs() {
       [&] { cfb27::frtk::EncodeField(std::vector<std::uint8_t>(3), signed_field,
                                     DecodedField{std::int64_t{-1025}}); },
       "signed value below minimum accepted");
+
+  const auto offset_binary =
+      Definition("offset-binary", 1, 2, 2, 11, -200, 1847);
+  const auto offset_original = SyntheticRecord(4, 0x6B);
+  const auto offset_expected =
+      EncodeMsbFirstOracle(offset_original, offset_binary, 226);
+  const auto offset_encoded = cfb27::frtk::EncodeField(
+      offset_original, offset_binary, DecodedField{std::int64_t{26}});
+  Require(offset_encoded == offset_expected,
+          "offset-binary JS/native golden vector mismatch");
+  Require(std::get<std::int64_t>(cfb27::frtk::DecodeField(
+              offset_expected, offset_binary)) == 26,
+          "offset-binary raw 226 did not decode to formatted 26");
+  Require((offset_encoded[1] & 0xC0) == (offset_original[1] & 0xC0) &&
+              (offset_encoded[2] & 0x07) == (offset_original[2] & 0x07),
+          "offset-binary codec damaged unrelated bits");
+  for (const std::int64_t value : {-17, 0, 1847}) {
+    const auto round_trip = cfb27::frtk::EncodeField(
+        offset_original, offset_binary, DecodedField{value});
+    Require(std::get<std::int64_t>(
+                cfb27::frtk::DecodeField(round_trip, offset_binary)) == value,
+            "offset-binary boundary round trip failed");
+  }
+  RequireThrows(
+      [&] { cfb27::frtk::EncodeField(offset_original, offset_binary,
+                                    DecodedField{std::int64_t{-201}}); },
+      "offset-binary value below minimum accepted");
+  auto oversized_offset_range = offset_binary;
+  oversized_offset_range.maximum = 1848;
+  RequireThrows(
+      [&] { cfb27::frtk::DecodeField(offset_original, oversized_offset_range); },
+      "offset-binary range larger than raw width accepted");
 
   const auto unsigned_field = Definition("unsigned", 0, 2, 0, 16, 10, 500);
   const auto encoded = cfb27::frtk::EncodeField(

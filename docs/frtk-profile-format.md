@@ -25,11 +25,13 @@ A relationship contains `sourceRow`, `fieldName`, `targetTableId`, and `targetRo
 
 The layout root has the same identity keys and a `tables` array. Table identity and dimensions must exactly match the snapshot. Each table adds an `authorityStatus` and all of its `fields`. Authority is one of `discovery_only`, `commit_adapter_required`, or `direct_verified`.
 
-Fields contain `name`, `encoding`, `byteOffset`, `storageBytes`, `bitOffset`, `bitWidth`, `minimum`, `maximum`, and `referenceTableId`. Encodings are `unsigned`, `signed`, `bitfield`, and `packed-reference`. Non-reference fields use `null` for `referenceTableId`.
+Fields contain `name`, `encoding`, `byteOffset`, `storageBytes`, `bitOffset`, `bitWidth`, `minimum`, `maximum`, and `referenceTableId`. Encodings are `unsigned`, `signed`, `offset-binary`, `bitfield`, and `packed-reference`. Non-reference fields use `null` for `referenceTableId`.
+
+`offset-binary` fields store an unsigned raw bit pattern. Decoding produces `raw + minimum`; encoding stores `value - minimum`. Their declared span, `maximum - minimum`, must fit within the field's unsigned bit width. `signed` remains a separate two's-complement encoding.
 
 Version 1 uses the FrTk physical record layout. `byteOffset` is the first physical byte containing the field, and `bitOffset` counts from the most-significant bit of the `storageBytes` window. The window is assembled in big-endian byte order. For a window of `storageBytes * 8` bits, extraction shifts right by `storageBytes * 8 - bitOffset - bitWidth`; encoding uses the same position and preserves every bit outside the field mask. `storageBytes` is from 1 through 5 so an unaligned field of up to 32 bits can cross five bytes.
 
-Schema export derives layout only from the field's physical `offset`, never `indexOffset`: `byteOffset = floor(offset / 8)`, `bitOffset = offset % 8`, and `storageBytes = ceil((bitOffset + length) / 8)`. Packed references remain exactly four bytes with `bitOffset: 0` and `bitWidth: 32`; their numeric encoding is `(tableId << 17) | rowIndex`, stored as four big-endian record bytes.
+Schema export maps schema `s_int` fields to `offset-binary` and derives layout only from the field's physical `offset`, never `indexOffset`: `byteOffset = floor(offset / 8)`, `bitOffset = offset % 8`, and `storageBytes = ceil((bitOffset + length) / 8)`. Packed references remain exactly four bytes with `bitOffset: 0` and `bitWidth: 32`; their numeric encoding is `(tableId << 17) | rowIndex`, stored as four big-endian record bytes.
 
 ## Determinism
 

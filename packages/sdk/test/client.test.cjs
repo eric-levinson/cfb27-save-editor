@@ -239,6 +239,30 @@ test('typed FrTk methods negotiate capabilities and return fixed sanitized shape
   ]);
 });
 
+test('SDK profile parser accepts exact offset-binary encoding and rejects misspellings', async (t) => {
+  const requests = [];
+  const client = await fakeClient(t, (request) => {
+    requests.push(request.command);
+    if (request.command === 'hello') return {
+      protocolVersion: 1, hostVersion: '0.2.0', supportedBuild: true,
+      writesAllowed: true, capabilities: ['frtkProfileV1'],
+    };
+    return { profileId: 'A'.repeat(64), schemaIdentity: 'schema-1',
+      buildIdentity: 'build-1', tableCount: 1 };
+  });
+  const accepted = validFrtkBundle();
+  Object.assign(accepted.layout.tables[0].fields[0], {
+    encoding: 'offset-binary', bitWidth: 11, minimum: -200, maximum: 1847,
+  });
+  await client.loadFrtkProfile(accepted);
+
+  const misspelled = validFrtkBundle();
+  misspelled.layout.tables[0].fields[0].encoding = 'offset_binary';
+  await assert.rejects(client.loadFrtkProfile(misspelled),
+    (error) => error.code === 'INVALID_REQUEST');
+  assert.deepEqual(requests, ['hello', 'loadFrtkProfile']);
+});
+
 test('typed FrTk methods reject selectors, values, and hostile response properties', async (t) => {
   const client = await fakeClient(t, (request) => request.command === 'hello'
     ? { protocolVersion: 1, hostVersion: '0.2.0', supportedBuild: true, writesAllowed: true,

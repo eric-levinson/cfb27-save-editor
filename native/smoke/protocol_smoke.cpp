@@ -265,6 +265,10 @@ Json SyntheticBundle(std::span<const std::uint8_t> records,
                          {"byteOffset", 0}, {"storageBytes", 2}, {"bitOffset", 0},
                          {"bitWidth", 16}, {"minimum", 0}, {"maximum", 65535},
                          {"referenceTableId", nullptr}},
+                        {{"name", "ZBias"}, {"encoding", "offset-binary"},
+                         {"byteOffset", 0}, {"storageBytes", 2}, {"bitOffset", 0},
+                         {"bitWidth", 11}, {"minimum", -200}, {"maximum", 1847},
+                         {"referenceTableId", nullptr}},
                         {{"name", "Stage"}, {"encoding", "unsigned"},
                          {"byteOffset", 2}, {"storageBytes", 1}, {"bitOffset", 0},
                          {"bitWidth", 8}, {"minimum", 0}, {"maximum", 255},
@@ -514,7 +518,7 @@ int wmain(int argc, wchar_t** argv) {
   Json frtk_read_params{{"generation", generation},
       {"records", Json::array({
           {{"uniqueId", 900001}, {"row", 0},
-           {"fields", Json::array({"Score", "Stage", "address", "bytesHex",
+           {"fields", Json::array({"Score", "ZBias", "Stage", "address", "bytesHex",
                                     "mask", "offset", "range", "operation",
                                     "tableId", "Link"})}},
           {{"uniqueId", 900001}, {"row", 1},
@@ -527,6 +531,7 @@ int wmain(int argc, wchar_t** argv) {
       response["result"]["records"][0]["values"] !=
           Json::array({
               {{"field", "Score"}, {"value", 0x1234}},
+              {{"field", "ZBias"}, {"value", -55}},
               {{"field", "Stage"}, {"value", 7}},
               {{"field", "address"}, {"value", 3}},
               {{"field", "bytesHex"}, {"value", 4}},
@@ -544,7 +549,8 @@ int wmain(int argc, wchar_t** argv) {
   const std::string lua_database_source =
       "assert(type(CFB27)=='table' and type(CFB27.db)=='table'); "
       "local t=CFB27.db:GetTableByUniqueId(900001); local r=t:GetRecord(0); "
-      "assert(r:GetField('Score')==0x1234 and r:GetField('Stage')==7); "
+      "assert(r:GetField('Score')==0x1234 and r:GetField('ZBias')==-55 and "
+      "r:GetField('Stage')==7); "
       "local link=r:GetField('Link'); assert(link.uniqueId==900001 and "
       "link.row==0 and link.tableId==nil); "
       "for _,v in ipairs({tostring(t),tostring(r)}) do "

@@ -278,6 +278,21 @@ test('compiler rejects packed-reference fields targeting unknown tables', () => 
   assert.throws(() => compileFrtkArtifacts(unknownFieldTarget), /unknown reference table/i);
 });
 
+test('compiler accepts the exact offset-binary encoding and rejects misspellings', () => {
+  const accepted = makeSyntheticInputs();
+  const field = accepted.layout.tables.find((table) => table.tableId === 4269).fields[0];
+  Object.assign(field, {
+    encoding: 'offset-binary', bitWidth: 11, minimum: -200, maximum: 1847,
+  });
+  assert.equal(compileFrtkArtifacts(accepted).layout.tables
+    .find((table) => table.tableId === 4269).fields[0].encoding, 'offset-binary');
+
+  const misspelled = makeSyntheticInputs();
+  misspelled.layout.tables.find((table) => table.tableId === 4269)
+    .fields[0].encoding = 'offset_binary';
+  assert.throws(() => compileFrtkArtifacts(misspelled), /unsupported field encoding/i);
+});
+
 test('compiler rejects empty snapshot and layout table sets', () => {
   const empty = makeSyntheticInputs();
   empty.snapshot.tables = [];
