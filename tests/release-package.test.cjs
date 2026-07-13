@@ -53,6 +53,10 @@ test('release content gate requires an adjacent explicit marker for synthetic ad
     'SYNTHETIC_ADDRESS:0x7FF612340080'));
   assert.doesNotThrow(() => assertAllowedContent('packages/sdk/src/client.cjs',
     'const maximum = 0xFFFFFFFFFFFFFFFFn;'));
+  assert.throws(() => assertAllowedContent('docs/leak.md', 'address 0xFFFFFFFFF'),
+    /process address/i);
+  assert.throws(() => assertAllowedContent('docs/leak.md', 'address 0xFFFFFFFFFFFFFFFF0'),
+    /process address/i);
 });
 
 test('staged-package validation scans packaged text for private process addresses', async (t) => {
@@ -130,6 +134,18 @@ test('actual TGZ and ZIP validation reject forbidden private archive paths', asy
     env: { ...process.env, SOURCE: release, ARCHIVE: zip }, windowsHide: true,
   });
   await assert.rejects(assertReleaseZipPayload(zip), /not allowed/i);
+});
+
+test('actual TGZ validation rejects the internal restructure PR document path', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cfb27-tgz-internal-doc-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packageRoot = path.join(root, 'package');
+  const internal = path.join(packageRoot, 'docs', 'development');
+  fs.mkdirSync(internal, { recursive: true });
+  fs.writeFileSync(path.join(internal, 'restructure-pr-body.md'), 'private', 'utf8');
+  const archive = path.join(root, 'internal-doc.tgz');
+  childProcess.execFileSync('tar.exe', ['-czf', archive, '-C', root, 'package']);
+  await assert.rejects(assertNpmArchivePayload(archive), /archive entry.*not allowed/i);
 });
 
 test('preview packaging requires an explicit native artifact directory', async () => {

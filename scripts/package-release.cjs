@@ -10,23 +10,31 @@ const root = path.resolve(__dirname, '..');
 const version = '0.2.0-dev.2';
 const SYNTHETIC_ADDRESS_MARKER = 'SYNTHETIC_ADDRESS:';
 const TEXT_LIKE = /\.(cjs|mjs|js|json|md|lua|ts|txt)$/i;
+const DENIED_SEGMENTS = new Set([
+  'archive', 'node_modules', 'schema', 'save', 'saves', 'backups',
+  'build', 'build-active', '__pycache__', '.requirements', 'research', 'superpowers',
+]);
 
 function releaseEntries() {
   return ['native', 'packages', 'examples', 'docs', 'README.md', 'LICENSE'];
 }
 
-function assertAllowedEntry(entry) {
+function assertPrivatePathPolicy(entry, { archive = false } = {}) {
   const normalized = String(entry).replaceAll('\\', '/').replace(/^\.\//, '');
   const lower = normalized.toLowerCase();
   const segments = lower.split('/');
-  const deniedSegments = new Set([
-    'archive', 'node_modules', 'schema', 'save', 'saves', 'backups',
-    'build', 'build-active', '__pycache__', '.requirements', 'research', 'superpowers',
-  ]);
-  if (segments.some((segment) => deniedSegments.has(segment)) ||
-      /\.(obj|pdb|log|bin|gz|xml|pyc)$/i.test(lower)) {
-    throw new Error(`Release entry is not allowed: ${entry}`);
+  if (segments.some((segment) => DENIED_SEGMENTS.has(segment)) ||
+      /\.(obj|pdb|log|bin|gz|xml|pyc)$/i.test(lower) ||
+      lower.endsWith('docs/development/restructure-pr-body.md')) {
+    throw new Error(`${archive ? 'Archive' : 'Release'} entry is not allowed: ${entry}`);
   }
+  return normalized;
+}
+
+function assertAllowedEntry(entry) {
+  const normalized = assertPrivatePathPolicy(entry);
+  const lower = normalized.toLowerCase();
+  const segments = lower.split('/');
 
   if (normalized === 'README.md' || normalized === 'LICENSE' ||
       normalized === 'SHA256SUMS.txt') return true;
@@ -43,9 +51,6 @@ function assertAllowedEntry(entry) {
   if (area === 'docs' && !normalized.endsWith('.md')) {
     throw new Error(`Release entry is not allowed: ${entry}`);
   }
-  if (lower === 'docs/development/restructure-pr-body.md') {
-    throw new Error(`Release entry is not allowed: ${entry}`);
-  }
   if (area === 'examples' && !/\.(lua|md)$/i.test(normalized)) {
     throw new Error(`Release entry is not allowed: ${entry}`);
   }
@@ -54,10 +59,10 @@ function assertAllowedEntry(entry) {
 
 function assertAllowedContent(entry, content) {
   const text = String(content);
-  for (const match of text.matchAll(/0x[0-9A-F]{9,16}/gi)) {
+  for (const match of text.matchAll(/0x[0-9A-F]{9,}/gi)) {
     const marked = text.slice(Math.max(0, match.index - SYNTHETIC_ADDRESS_MARKER.length),
       match.index) === SYNTHETIC_ADDRESS_MARKER;
-    const numericBound = /^0xF{9,16}$/i.test(match[0]);
+    const numericBound = match[0].toUpperCase() === '0XFFFFFFFFFFFFFFFF';
     if (!marked && !numericBound) {
       throw new Error(`Release text contains a canonical process address: ${entry}`);
     }
@@ -84,15 +89,10 @@ async function walkFiles(directory, relative = '') {
 function assertArchiveMemberPath(entry) {
   const normalized = String(entry).replaceAll('\\', '/').replace(/^\.\//, '');
   const segments = normalized.toLowerCase().split('/').filter(Boolean);
-  const denied = new Set([
-    'archive', 'node_modules', 'schema', 'save', 'saves', 'backups',
-    'build', 'build-active', '__pycache__', '.requirements', 'research', 'superpowers',
-  ]);
-  if (!normalized || path.posix.isAbsolute(normalized) || segments.includes('..') ||
-      segments.some((segment) => denied.has(segment)) ||
-      /\.(obj|pdb|log|bin|gz|xml|pyc)$/i.test(normalized)) {
+  if (!normalized || path.posix.isAbsolute(normalized) || segments.includes('..')) {
     throw new Error(`Archive entry is not allowed: ${entry}`);
   }
+  assertPrivatePathPolicy(normalized, { archive: true });
   return true;
 }
 
