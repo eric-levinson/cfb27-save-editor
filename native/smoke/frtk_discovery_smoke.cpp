@@ -165,7 +165,10 @@ class FakeBackend final : public DiscoveryBackend {
       while (!deadline.Expired()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
-      return {.complete = false, .code = "OPERATION_TIMEOUT"};
+      return {.complete = false, .code = "OPERATION_TIMEOUT",
+              .counters = {.pages_scanned = 2, .chunks_scanned = 3,
+                           .scanned_bytes = 4096, .candidate_windows = 4,
+                           .capped_matches = 1}};
     }
     ScanObservationResult result{.complete = true};
     for (const auto& allocation : allocations) {
@@ -459,6 +462,23 @@ void TestDeadlineRejectsPartialDiscovery() {
   Require(!result.valid && result.code == "OPERATION_TIMEOUT",
           "deadline returns deterministic discovery timeout");
   Require(result.tables.empty(), "deadline does not publish partial tables");
+  Require(result.timeout.has_value(), "deadline includes sanitized progress");
+  Require(result.timeout->stage == DiscoveryStage::kScan,
+          "deadline identifies scan stage");
+  Require(result.timeout->table_unique_id == bundle.tables[1].unique_id,
+          "deadline identifies only the public table Unique ID");
+  Require(result.timeout->fingerprint_ordinal == 0,
+          "deadline identifies zero-based fingerprint ordinal");
+  Require(result.timeout->completed_fingerprint_count == 3,
+          "deadline reports completed fingerprint count");
+  Require(result.timeout->counters.pages_scanned == 2 &&
+              result.timeout->counters.chunks_scanned == 3 &&
+              result.timeout->counters.scanned_bytes == 4096 &&
+              result.timeout->counters.candidate_windows == 4 &&
+              result.timeout->counters.capped_matches == 1,
+          "deadline reports bounded cumulative scan counters");
+  Require(result.timeout->elapsed_milliseconds <= kMaxSafeDiagnosticCounter,
+          "deadline elapsed time is a bounded safe integer");
   Require(elapsed < std::chrono::milliseconds(500),
           "native deadline terminates well before SDK timeout");
 }
@@ -476,6 +496,12 @@ void TestDeadlineBoundsAllocationValidation() {
   Require(!result.valid && result.code == "OPERATION_TIMEOUT" &&
               result.tables.empty(),
           "allocation validation deadline publishes no partial table");
+  Require(result.timeout &&
+              result.timeout->stage == DiscoveryStage::kAllocation &&
+              result.timeout->table_unique_id == bundle.tables[0].unique_id &&
+              !result.timeout->fingerprint_ordinal.has_value() &&
+              result.timeout->completed_fingerprint_count == 3,
+          "allocation deadline reports phase without fingerprint identity");
 }
 
 void TestRelationshipsUseIndependentResolutionSnapshot() {

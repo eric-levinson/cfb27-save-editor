@@ -483,7 +483,8 @@ async function main(argv, {
       ? sanitizeTransactionError(error)
       : error;
     printError(io, safeError, parsed.json === true, {
-      includeDetails: parsed.command !== 'frtk',
+      includeDetails: parsed.command !== 'frtk' ||
+        safeError?.code === 'FRTK_DISCOVERY_TIMEOUT',
     });
     return exitCodeFor(safeError);
   }

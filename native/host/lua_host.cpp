@@ -268,9 +268,14 @@ class ProcessDiscoveryBackend final : public cfb27::frtk::DiscoveryBackend {
       std::size_t max_matches,
       const cfb27::frtk::DiscoveryDeadline& deadline) override {
     cfb27::frtk::ScanObservationResult output{.complete = false};
+    const auto add = [](std::uint64_t& target, std::uint64_t value) {
+      target = value > cfb27::frtk::kMaxSafeDiagnosticCounter - target
+                   ? cfb27::frtk::kMaxSafeDiagnosticCounter
+                   : target + value;
+    };
     std::optional<std::string> cursor;
     for (std::size_t page = 0; page < 4096; ++page) {
-      if (deadline.Expired()) return {.code = "OPERATION_TIMEOUT"};
+      if (deadline.Expired()) return output.code = "OPERATION_TIMEOUT", output;
       auto pattern = cfb27::memory::MappedBytes::CopyFrom(fingerprint.pattern);
       auto mask = cfb27::memory::MappedBytes::CopyFrom(fingerprint.mask);
       if (!pattern || !mask) return {.code = "scan_setup_failed"};
@@ -282,15 +287,23 @@ class ProcessDiscoveryBackend final : public cfb27::frtk::DiscoveryBackend {
           .purpose = cfb27::memory::ScanPurpose::kFrtkInternal,
           .should_cancel = [&deadline] { return deadline.Expired(); }};
       auto result = cfb27::memory::ScanPrivateMemory(request);
-      if (!result.code.empty()) return {.code = result.code};
+      add(output.counters.pages_scanned, 1);
+      add(output.counters.chunks_scanned, result.chunks_scanned);
+      add(output.counters.scanned_bytes, result.progress_scanned_bytes);
+      add(output.counters.candidate_windows, result.candidate_windows);
+      if (!result.code.empty()) return output.code = result.code, output;
       for (const auto& match : result.matches) {
         if (!match.allocation) return {.code = "allocation_invalid"};
         const auto address = cfb27::memory::ParseAddress(match.address);
         const auto base = cfb27::memory::ParseAddress(match.allocation->base);
         if (!address || !base) return {.code = "allocation_invalid"};
         output.matches.push_back({*address, *base, match.allocation->size});
+        output.counters.capped_matches = (std::min)(
+            static_cast<std::uint64_t>(output.matches.size()),
+            static_cast<std::uint64_t>(max_matches));
         if (output.matches.size() > max_matches) {
-          return {.complete = false, .code = "too_many_matches"};
+          output.code = "too_many_matches";
+          return output;
         }
       }
       if (result.complete) {
@@ -298,11 +311,13 @@ class ProcessDiscoveryBackend final : public cfb27::frtk::DiscoveryBackend {
         return output;
       }
       if (!result.next_cursor || (cursor && *result.next_cursor == *cursor)) {
-        return {.code = "scan_incomplete"};
+        output.code = "scan_incomplete";
+        return output;
       }
       cursor = std::move(result.next_cursor);
     }
-    return {.code = "scan_limit"};
+    output.code = "scan_limit";
+    return output;
   }
 
   bool ReadBatch(std::span<const cfb27::frtk::ReadRequest> requests,
@@ -1260,8 +1275,29 @@ cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
       cfb27::frtk::DiscoveryResult rejected{.valid = false,
                                             .code = "discovery_failed"};
       (void)g_frtk_catalog.Install(*g_frtk_profile, rejected);
-      return ErrorResponse(id, "FRTK_DISCOVERY_TIMEOUT",
-                           "FrTk discovery exceeded its native operation budget");
+      const auto& timeout = *discovery.timeout;
+      const auto stage = timeout.stage == cfb27::frtk::DiscoveryStage::kScan
+                             ? "scan"
+                         : timeout.stage == cfb27::frtk::DiscoveryStage::kAllocation
+                             ? "allocation"
+                         : timeout.stage == cfb27::frtk::DiscoveryStage::kRelationship
+                             ? "relationship"
+                             : "reread";
+      return ErrorResponse(
+          id, "FRTK_DISCOVERY_TIMEOUT",
+          "FrTk discovery exceeded its native operation budget",
+          {{"stage", stage},
+           {"tableUniqueId", timeout.table_unique_id
+                                 ? Json(*timeout.table_unique_id) : Json(nullptr)},
+           {"fingerprintOrdinal", timeout.fingerprint_ordinal
+                                      ? Json(*timeout.fingerprint_ordinal) : Json(nullptr)},
+           {"completedFingerprintCount", timeout.completed_fingerprint_count},
+           {"elapsedMilliseconds", timeout.elapsed_milliseconds},
+           {"pagesScanned", timeout.counters.pages_scanned},
+           {"chunksScanned", timeout.counters.chunks_scanned},
+           {"scannedBytes", timeout.counters.scanned_bytes},
+           {"candidateWindows", timeout.counters.candidate_windows},
+           {"cappedMatches", timeout.counters.capped_matches}});
     }
     const bool complete = discovery.valid &&
         discovery.tables.size() == g_frtk_profile->tables.size() &&

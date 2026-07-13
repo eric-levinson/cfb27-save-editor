@@ -306,13 +306,23 @@ void TestCandidateLoopCancellation() {
       .mask = MappedFill(8, 0xFF),
       .max_matches = 64,
       .cursor = FormatAddress(reinterpret_cast<std::uintptr_t>(allocation.get())),
-      .should_cancel = [&] { return ++cancellation_checks >= 3; },
+      .should_cancel = [&] { return ++cancellation_checks >= 4; },
   });
   Require(scan.code == "OPERATION_TIMEOUT",
           "candidate loop returns deterministic cancellation code");
   Require(scan.matches.empty(), "cancelled scan clears partial matches");
-  Require(cancellation_checks == 3,
+  Require(cancellation_checks == 4,
           "cancellation is checked inside candidate iteration");
+  Require(scan.scanned_bytes <= cfb27::memory::kMaxSafeDiagnosticCounter &&
+              scan.chunks_scanned <= cfb27::memory::kMaxSafeDiagnosticCounter &&
+              scan.candidate_windows <= cfb27::memory::kMaxSafeDiagnosticCounter,
+          "cancelled scan progress counters remain bounded safe integers");
+  Require(scan.chunks_scanned == 1,
+          "cancelled scan reports its completed read chunk");
+  Require(scan.progress_scanned_bytes == kAllocationSize,
+          "cancelled scan reports bytes consumed before cancellation");
+  Require(scan.candidate_windows == 1,
+          "cancelled scan reports its completed candidate window");
 }
 
 void TestScanHexDecodeRejectsBeforeMappedAllocation() {

@@ -364,7 +364,32 @@ function validateInvalidateResult(result, params) {
 function sanitizeFrtkError(error) {
   const code = typeof error?.code === 'string' && Object.hasOwn(FRTK_ERROR_MESSAGES, error.code)
     ? error.code : 'INVALID_RESPONSE';
-  return new Cfb27HookError(code, FRTK_ERROR_MESSAGES[code]);
+  const details = code === 'FRTK_DISCOVERY_TIMEOUT' ? error.details : undefined;
+  return new Cfb27HookError(code, FRTK_ERROR_MESSAGES[code], details);
+}
+
+function validateFrtkTimeoutDetails(details) {
+  if (!hasExactKeys(details, ['stage', 'tableUniqueId', 'fingerprintOrdinal',
+    'completedFingerprintCount', 'elapsedMilliseconds', 'pagesScanned', 'chunksScanned',
+    'scannedBytes', 'candidateWindows', 'cappedMatches']) ||
+      !['scan', 'allocation', 'relationship', 'reread'].includes(details.stage) ||
+      (details.tableUniqueId !== null &&
+        !isSafeIntegerBetween(details.tableUniqueId, 0, 0xFFFFFFFF)) ||
+      (details.fingerprintOrdinal !== null &&
+        !isSafeIntegerBetween(details.fingerprintOrdinal, 0, Number.MAX_SAFE_INTEGER)) ||
+      !isSafeIntegerBetween(details.completedFingerprintCount, 0, Number.MAX_SAFE_INTEGER) ||
+      !isSafeIntegerBetween(details.elapsedMilliseconds, 0, Number.MAX_SAFE_INTEGER) ||
+      !isSafeIntegerBetween(details.pagesScanned, 0, Number.MAX_SAFE_INTEGER) ||
+      !isSafeIntegerBetween(details.chunksScanned, 0, Number.MAX_SAFE_INTEGER) ||
+      !isSafeIntegerBetween(details.scannedBytes, 0, Number.MAX_SAFE_INTEGER) ||
+      !isSafeIntegerBetween(details.candidateWindows, 0, Number.MAX_SAFE_INTEGER) ||
+      !isSafeIntegerBetween(details.cappedMatches, 0, 8) ||
+      (details.stage === 'scan' &&
+        (details.tableUniqueId === null || details.fingerprintOrdinal === null)) ||
+      (details.stage !== 'scan' && details.fingerprintOrdinal !== null)) {
+    throw invalidResponse('Host returned malformed FrTk timeout details');
+  }
+  return { ...details };
 }
 
 function validateFrtkSuccessResponse(response, expectedId) {
@@ -381,6 +406,10 @@ function validateFrtkErrorResponse(response, expectedId) {
       typeof response.error.code !== 'string' || typeof response.error.message !== 'string' ||
       !isObject(response.error.details)) {
     throw invalidResponse('Host returned a malformed FrTk error response');
+  }
+  if (response.error.code === 'FRTK_DISCOVERY_TIMEOUT') {
+    return { code: response.error.code,
+      details: validateFrtkTimeoutDetails(response.error.details) };
   }
   return response.error.code;
 }
@@ -797,8 +826,10 @@ function createClient({ pid, pipeName, timeoutMs = 3000 } = {}) {
           for (const response of responses) {
             if (response?.ok === false && typeof hostErrorValidator === 'function') {
               try {
-                const code = hostErrorValidator(response, id);
-                finish(new Cfb27HookError(code, 'Host rejected the request'));
+                const validated = hostErrorValidator(response, id);
+                const code = typeof validated === 'string' ? validated : validated.code;
+                const details = typeof validated === 'string' ? undefined : validated.details;
+                finish(new Cfb27HookError(code, 'Host rejected the request', details));
               } catch (error) {
                 finish(error);
               }

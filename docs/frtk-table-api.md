@@ -70,6 +70,11 @@ operations remain host-internal. Raw memory diagnostic methods are separate and
 retain their existing contracts.
 
 Stable FrTk errors are `FRTK_PROFILE_INVALID`, `FRTK_DISCOVERY_FAILED`,
+`FRTK_DISCOVERY_TIMEOUT`,
 `FRTK_CATALOG_STALE`, `FRTK_FIELD_INVALID`, and
 `FRTK_AUTHORITY_UNPROVEN`. Branch on `error.code`; messages and hostile host
-details are sanitized.
+details are sanitized. A discovery timeout preserves only its exact allowlisted
+progress object: phase, public Unique ID or `null`, zero-based fingerprint
+ordinal or `null`, completed fingerprint count, elapsed milliseconds, and
+bounded cumulative page, chunk, scanned-byte, candidate-window, and capped-match
+counters. It never exposes private memory or fingerprint material.

@@ -47,6 +47,7 @@ constexpr std::size_t kMaxScanPageBytes = 32ull * 1024 * 1024;
 constexpr std::size_t kMaxReadRanges = 64;
 constexpr std::size_t kMaxReadRangeBytes = 64ull * 1024;
 constexpr std::size_t kMaxReadBytes = 256ull * 1024;
+constexpr std::uint64_t kMaxSafeDiagnosticCounter = 9007199254740991ull;
 
 std::optional<MappedBytes> DecodeScanHex(std::string_view text);
 
@@ -157,6 +158,9 @@ struct ScanResult {
   bool complete{};
   std::string code;
   std::size_t scanned_bytes{};
+  std::uint64_t progress_scanned_bytes{};
+  std::uint64_t chunks_scanned{};
+  std::uint64_t candidate_windows{};
   std::optional<std::string> next_cursor;
   std::vector<ScanMatch> matches;
 };

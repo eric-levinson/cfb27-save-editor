@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <span>
 #include <string>
@@ -518,13 +519,31 @@ int wmain(int argc, wchar_t** argv) {
   if (!SetEnvironmentVariableW(L"CFB27_SMOKE_FRTK_TIMEOUT", L"1")) return 139;
   const auto timeout_started = std::chrono::steady_clock::now();
   if (!Request(pipe, {{"protocol", 1}, {"id", "frtk-timeout"},
-                      {"command", "discoverFrtkCatalog"},
+      {"command", "discoverFrtkCatalog"},
                       {"params", Json::object()}}, response, false) ||
-      !IsError(response, "FRTK_DISCOVERY_TIMEOUT") ||
-      !response["error"].value("details", Json::object()).empty() ||
-      ContainsSensitiveKey(response["error"])) {
+      !IsError(response, "FRTK_DISCOVERY_TIMEOUT")) {
     std::cerr << "frtk timeout response: " << response.dump() << '\n';
     return 140;
+  }
+  const auto& timeout_details = response["error"]["details"];
+  const std::set<std::string> expected_timeout_keys{
+      "stage", "tableUniqueId", "fingerprintOrdinal",
+      "completedFingerprintCount", "elapsedMilliseconds", "pagesScanned",
+      "chunksScanned", "scannedBytes", "candidateWindows", "cappedMatches"};
+  std::set<std::string> timeout_keys;
+  for (const auto& [key, value] : timeout_details.items()) timeout_keys.insert(key);
+  if (timeout_keys != expected_timeout_keys ||
+      timeout_details.value("stage", "") != "scan" ||
+      timeout_details.value("tableUniqueId", 0u) != 900001u ||
+      timeout_details["fingerprintOrdinal"] != 0 ||
+      timeout_details.value("completedFingerprintCount", 1ull) != 0 ||
+      timeout_details.value("pagesScanned", 1ull) != 0 ||
+      timeout_details.value("chunksScanned", 1ull) != 0 ||
+      timeout_details.value("scannedBytes", 1ull) != 0 ||
+      timeout_details.value("candidateWindows", 1ull) != 0 ||
+      timeout_details.value("cappedMatches", 1ull) != 0) {
+    std::cerr << "frtk timeout details: " << timeout_details.dump() << '\n';
+    return 146;
   }
   const auto timeout_elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -38,6 +38,16 @@ bool IsReadableProtection(DWORD protection) {
   }
 }
 
+void SaturatingIncrement(std::uint64_t& value) {
+  if (value < kMaxSafeDiagnosticCounter) ++value;
+}
+
+void SaturatingAdd(std::uint64_t& target, std::uint64_t value) {
+  target = value > kMaxSafeDiagnosticCounter - target
+               ? kMaxSafeDiagnosticCounter
+               : target + value;
+}
+
 bool IsMappedReadableStorage(const void* pointer) {
   MEMORY_BASIC_INFORMATION info{};
   return pointer != nullptr &&
@@ -501,6 +511,9 @@ ScanResult ScanPrivateMemory(const ScanRequest& request, ScanReadFunction read,
       result.code = kMemoryAccessDenied;
       return result;
     }
+    SaturatingIncrement(result.chunks_scanned);
+    SaturatingAdd(result.progress_scanned_bytes,
+                  static_cast<std::uint64_t>(unique_bytes));
 
     if (read_bytes >= request.pattern.size()) {
       const auto last_offset = read_bytes - request.pattern.size();
@@ -514,6 +527,7 @@ ScanResult ScanPrivateMemory(const ScanRequest& request, ScanReadFunction read,
         }
         const auto candidate_end = std::min(
             last_offset + 1, offset + kCancellationCandidateWindow);
+        SaturatingIncrement(result.candidate_windows);
         const auto found = matcher->FindNext(scan_buffer->bytes(), offset,
                                              candidate_end);
         if (!found) {

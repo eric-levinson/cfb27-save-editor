@@ -39,6 +39,27 @@ struct ScanObservationResult {
   bool complete{};
   std::string code;
   std::vector<ScanObservation> matches;
+  struct Counters {
+    std::uint64_t pages_scanned{};
+    std::uint64_t chunks_scanned{};
+    std::uint64_t scanned_bytes{};
+    std::uint64_t candidate_windows{};
+    std::uint64_t capped_matches{};
+  } counters;
+};
+
+using DiscoveryCounters = ScanObservationResult::Counters;
+constexpr std::uint64_t kMaxSafeDiagnosticCounter = 9007199254740991ull;
+
+enum class DiscoveryStage { kScan, kAllocation, kRelationship, kReread };
+
+struct DiscoveryTimeoutDetails {
+  DiscoveryStage stage{DiscoveryStage::kScan};
+  std::optional<std::uint32_t> table_unique_id;
+  std::optional<std::size_t> fingerprint_ordinal;
+  std::uint64_t completed_fingerprint_count{};
+  std::uint64_t elapsed_milliseconds{};
+  DiscoveryCounters counters;
 };
 
 struct ReadRequest {
@@ -93,6 +114,7 @@ struct DiscoveryResult {
   bool valid{true};
   std::string code;
   std::vector<TableDiscovery> tables;
+  std::optional<DiscoveryTimeoutDetails> timeout;
 
   [[nodiscard]] const TableDiscovery* FindTableByUniqueId(
       std::uint32_t unique_id) const;

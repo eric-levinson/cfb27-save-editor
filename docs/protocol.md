@@ -265,6 +265,22 @@ timeout, invalid request/response, script failure, installation conflict, and
 backup-verification failure. Consumers should branch on `error.code`, not error
 message text.
 
+`FRTK_DISCOVERY_TIMEOUT` is the only typed FrTk error that carries public
+progress details. Its `details` object has exactly these keys:
+
+```json
+{"stage":"scan","tableUniqueId":900001,"fingerprintOrdinal":2,"completedFingerprintCount":7,"elapsedMilliseconds":1999,"pagesScanned":3,"chunksScanned":24,"scannedBytes":100663296,"candidateWindows":24576,"cappedMatches":8}
+```
+
+`stage` is one of `scan`, `allocation`, `relationship`, or `reread`.
+`tableUniqueId` is the public table Unique ID, or `null` outside a
+table-specific phase. `fingerprintOrdinal` is zero-based during `scan` and is
+`null` for the other phases. All counters are nonnegative safe integers,
+saturate instead of overflowing, and `cappedMatches` is at most 8. No address,
+allocation, pattern, mask, raw byte, table-name, row-index, protection, or
+memory-topology data is included. Unknown or malformed detail keys make the SDK
+reject the response as `INVALID_RESPONSE`.
+
 Memory commands additionally return `MEMORY_ACCESS_DENIED` when a requested
 range is not wholly readable private memory, `SCAN_LIMIT_EXCEEDED` when the
 aggregate scan bound would be crossed, and `TOO_MANY_MATCHES` rather than

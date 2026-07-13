@@ -291,18 +291,60 @@ test('discoverFrtkCatalog rejects public selectors before host I/O', async () =>
     (error) => error.code === 'INVALID_REQUEST');
 });
 
-test('discoverFrtkCatalog preserves a sanitized native timeout error', async (t) => {
+test('discoverFrtkCatalog preserves the exact sanitized native timeout schema', async (t) => {
+  const details = {
+    stage: 'scan', tableUniqueId: 900001, fingerprintOrdinal: 2,
+    completedFingerprintCount: 7, elapsedMilliseconds: 1999,
+    pagesScanned: 3, chunksScanned: 24, scannedBytes: 96 * 1024 * 1024,
+    candidateWindows: 24576, cappedMatches: 8,
+  };
   const client = await fakeRawResponseClient(t, (request) => request.command === 'hello'
     ? { protocol: 1, id: request.id, ok: true,
       result: { protocolVersion: 1, hostVersion: '0.2.0', supportedBuild: true,
         writesAllowed: false, capabilities: ['frtkCatalogV1'] } }
     : { protocol: 1, id: request.id, ok: false,
       error: { code: 'FRTK_DISCOVERY_TIMEOUT', message: 'secret 0xDEADBEEF',
-        details: { address: '0xDEADBEEF' } } });
+        details } });
   await assert.rejects(client.discoverFrtkCatalog(), (error) =>
     error.code === 'FRTK_DISCOVERY_TIMEOUT' &&
     error.message === 'FrTk discovery exceeded its native operation budget' &&
-    !error.message.includes('0xDEADBEEF'));
+    !error.message.includes('0xDEADBEEF') &&
+    assert.deepEqual(error.details, details) === undefined);
+});
+
+test('discoverFrtkCatalog rejects hostile or unknown timeout detail keys', async (t) => {
+  for (const hostile of ['address', 'bytesHex', 'pattern', 'mask', 'allocationBase', 'unknown']) {
+    const client = await fakeRawResponseClient(t, (request) => request.command === 'hello'
+      ? { protocol: 1, id: request.id, ok: true,
+        result: { protocolVersion: 1, hostVersion: '0.2.0', supportedBuild: true,
+          writesAllowed: false, capabilities: ['frtkCatalogV1'] } }
+      : { protocol: 1, id: request.id, ok: false, error: {
+        code: 'FRTK_DISCOVERY_TIMEOUT', message: 'hostile', details: {
+          stage: 'scan', tableUniqueId: 900001, fingerprintOrdinal: 0,
+          completedFingerprintCount: 0, elapsedMilliseconds: 1, pagesScanned: 0,
+          chunksScanned: 0, scannedBytes: 0, candidateWindows: 0, cappedMatches: 0,
+          [hostile]: 'private',
+        },
+      } });
+    await assert.rejects(client.discoverFrtkCatalog(), (error) =>
+      error.code === 'INVALID_RESPONSE' && error.details === undefined, hostile);
+  }
+});
+
+test('discoverFrtkCatalog rejects timeout match counters above the native cap', async (t) => {
+  const client = await fakeRawResponseClient(t, (request) => request.command === 'hello'
+    ? { protocol: 1, id: request.id, ok: true,
+      result: { protocolVersion: 1, hostVersion: '0.2.0', supportedBuild: true,
+        writesAllowed: false, capabilities: ['frtkCatalogV1'] } }
+    : { protocol: 1, id: request.id, ok: false, error: {
+      code: 'FRTK_DISCOVERY_TIMEOUT', message: 'hostile', details: {
+        stage: 'scan', tableUniqueId: 900001, fingerprintOrdinal: 0,
+        completedFingerprintCount: 0, elapsedMilliseconds: 1, pagesScanned: 0,
+        chunksScanned: 0, scannedBytes: 0, candidateWindows: 0, cappedMatches: 9,
+      },
+    } });
+  await assert.rejects(client.discoverFrtkCatalog(), (error) =>
+    error.code === 'INVALID_RESPONSE' && error.details === undefined);
 });
 
 test('typed FrTk field selectors reject invalid Unicode and UTF-8 overflow before I/O', async () => {

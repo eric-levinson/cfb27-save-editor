@@ -481,6 +481,35 @@ test('frtk catalog discover loads a profile, discovers, and emits only typed cat
   }
 });
 
+test('frtk catalog discover JSON exposes only sanitized timeout progress', async () => {
+  const details = {
+    stage: 'scan', tableUniqueId: 900001, fingerprintOrdinal: 1,
+    completedFingerprintCount: 4, elapsedMilliseconds: 2000,
+    pagesScanned: 2, chunksScanned: 16, scannedBytes: 64 * 1024 * 1024,
+    candidateWindows: 16384, cappedMatches: 8,
+  };
+  const timeout = Object.assign(new Error('FrTk discovery exceeded its native operation budget'), {
+    code: 'FRTK_DISCOVERY_TIMEOUT', details,
+  });
+  const client = {
+    loadFrtkProfileFromFile: async () => ({ tableCount: 1 }),
+    discoverFrtkCatalog: async () => { throw timeout; },
+  };
+  const { io, output } = memoryIo();
+  const sdk = { discoverGame: async () => ({ pid: 27 }), createClient: () => client };
+  assert.equal(await main(['frtk', 'catalog', 'discover', '.frtk/profile.json', '--json'], {
+    sdk, io, fileSystem: memoryFileSystem(async () => '{}'), cwd: 'C:\\workspace',
+  }), 70);
+  assert.deepEqual(JSON.parse(output.stdout), {
+    ok: false,
+    error: {
+      code: 'FRTK_DISCOVERY_TIMEOUT',
+      message: 'FrTk discovery exceeded its native operation budget',
+      details,
+    },
+  });
+});
+
 test('frtk records read loads its profile and accepts only a numeric uniqueId selector', async () => {
   const calls = [];
   const { io, output } = memoryIo();

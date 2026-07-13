@@ -104,6 +104,11 @@ environment fallbacks are `CFB27_GAME_DIR`, `CFB27_MMC_DIR`, and
 One-shot `--json` commands emit exactly one JSON object. `logs --follow --json`
 emits JSON Lines, one object for each new log event.
 
+FrTk errors normally omit details. For `frtk catalog discover --json`, a native
+`FRTK_DISCOVERY_TIMEOUT` includes only the SDK-validated timeout progress
+schema documented in the protocol. Human output remains the stable code and
+message, and hostile or extra native properties are never printed.
+
 ## Exit families
 
 - `0` — success
