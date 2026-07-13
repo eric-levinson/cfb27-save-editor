@@ -33,9 +33,39 @@ constexpr std::size_t kMaxRelationshipsPerTable = 64;
 constexpr std::size_t kMaxRelationshipsTotal = 4096;
 constexpr std::size_t kMaxNameBytes = 128;
 
+bool IsValidUtf8(std::string_view value) {
+  for (std::size_t index = 0; index < value.size();) {
+    const auto byte = static_cast<unsigned char>(value[index]);
+    if (byte <= 0x7F) { ++index; continue; }
+    const auto continuation = [&](std::size_t offset) {
+      return index + offset < value.size() &&
+             (static_cast<unsigned char>(value[index + offset]) & 0xC0) == 0x80;
+    };
+    if (byte >= 0xC2 && byte <= 0xDF && continuation(1)) { index += 2; continue; }
+    if (byte >= 0xE0 && byte <= 0xEF && continuation(1) && continuation(2)) {
+      const auto second = static_cast<unsigned char>(value[index + 1]);
+      if ((byte != 0xE0 || second >= 0xA0) && (byte != 0xED || second <= 0x9F)) {
+        index += 3; continue;
+      }
+    }
+    if (byte >= 0xF0 && byte <= 0xF4 && continuation(1) && continuation(2) &&
+        continuation(3)) {
+      const auto second = static_cast<unsigned char>(value[index + 1]);
+      if ((byte != 0xF0 || second >= 0x90) && (byte != 0xF4 || second <= 0x8F)) {
+        index += 4; continue;
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
 std::string LogicalName(const json& value, const char* message) {
   if (!value.is_string()) throw std::invalid_argument(message);
   auto result = value.get<std::string>();
+  if (!IsValidUtf8(result)) {
+    throw std::invalid_argument("Logical names must use valid UTF-8");
+  }
   if (result.empty() || result.size() > kMaxNameBytes) {
     throw std::invalid_argument("Logical names must use 1..128 UTF-8 bytes");
   }

@@ -122,6 +122,17 @@ void TestSchemaRegistry() {
   auto authority = ValidLayout();
   authority["tables"][0]["authorityStatus"] = "verified-ish";
   Require(!registry.LoadTrustedForTesting(authority, &error), "unknown authority accepted");
+  auto invalid_table_name = ValidLayout();
+  invalid_table_name["tables"][0]["logicalName"] = std::string("\xF0\x28\x8C\x28", 4);
+  Require(!registry.LoadTrustedForTesting(invalid_table_name, &error) &&
+              error.find("valid UTF-8") != std::string::npos,
+          "invalid UTF-8 layout table name accepted");
+  auto invalid_field_name = ValidLayout();
+  invalid_field_name["tables"][0]["fields"][0]["name"] =
+      std::string("\xC0\xAF", 2);
+  Require(!registry.LoadTrustedForTesting(invalid_field_name, &error) &&
+              error.find("valid UTF-8") != std::string::npos,
+          "overlong UTF-8 field name accepted");
   auto table_order = ValidLayout();
   std::swap(table_order["tables"][0], table_order["tables"][1]);
   Require(!registry.LoadTrustedForTesting(table_order, &error) &&

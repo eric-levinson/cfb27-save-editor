@@ -3,14 +3,13 @@
 const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
+const os = require('node:os');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
 const version = '0.2.0-dev.2';
-const SYNTHETIC_PROCESS_ADDRESSES = new Set([
-  '0X7FF612300000', '0X7FF612340000', '0X7FF61234007C',
-  '0X7FF612340080', '0X7FF614340000', '0XFFFFFFFFFFFFFFFF',
-]);
+const SYNTHETIC_ADDRESS_MARKER = 'SYNTHETIC_ADDRESS:';
+const TEXT_LIKE = /\.(cjs|mjs|js|json|md|lua|ts|txt)$/i;
 
 function releaseEntries() {
   return ['native', 'packages', 'examples', 'docs', 'README.md', 'LICENSE'];
@@ -56,7 +55,10 @@ function assertAllowedEntry(entry) {
 function assertAllowedContent(entry, content) {
   const text = String(content);
   for (const match of text.matchAll(/0x[0-9A-F]{9,16}/gi)) {
-    if (!SYNTHETIC_PROCESS_ADDRESSES.has(match[0].toUpperCase())) {
+    const marked = text.slice(Math.max(0, match.index - SYNTHETIC_ADDRESS_MARKER.length),
+      match.index) === SYNTHETIC_ADDRESS_MARKER;
+    const numericBound = /^0xF{9,16}$/i.test(match[0]);
+    if (!marked && !numericBound) {
       throw new Error(`Release text contains a canonical process address: ${entry}`);
     }
   }
@@ -79,15 +81,83 @@ async function walkFiles(directory, relative = '') {
   return files;
 }
 
+function assertArchiveMemberPath(entry) {
+  const normalized = String(entry).replaceAll('\\', '/').replace(/^\.\//, '');
+  const segments = normalized.toLowerCase().split('/').filter(Boolean);
+  const denied = new Set([
+    'archive', 'node_modules', 'schema', 'save', 'saves', 'backups',
+    'build', 'build-active', '__pycache__', '.requirements', 'research', 'superpowers',
+  ]);
+  if (!normalized || path.posix.isAbsolute(normalized) || segments.includes('..') ||
+      segments.some((segment) => denied.has(segment)) ||
+      /\.(obj|pdb|log|bin|gz|xml|pyc)$/i.test(normalized)) {
+    throw new Error(`Archive entry is not allowed: ${entry}`);
+  }
+  return true;
+}
+
+function isTextLike(file) {
+  return TEXT_LIKE.test(file) || /(^|\/)(README\.md|LICENSE)$/i.test(file);
+}
+
+async function scanExtractedPayload(directory) {
+  const files = await walkFiles(directory);
+  for (const file of files) {
+    assertArchiveMemberPath(file);
+    if (isTextLike(file)) {
+      assertAllowedContent(file, await fs.readFile(path.join(directory, file), 'utf8'));
+    }
+  }
+  return files;
+}
+
+async function assertNpmArchivePayload(archive) {
+  const extracted = await fs.mkdtemp(path.join(os.tmpdir(), 'cfb27-tgz-scan-'));
+  try {
+    const listing = childProcess.execFileSync('tar.exe', ['-tzf', archive],
+      { encoding: 'utf8', windowsHide: true });
+    for (const entry of listing.split(/\r?\n/).filter(Boolean)) assertArchiveMemberPath(entry);
+    childProcess.execFileSync('tar.exe', ['-xzf', archive, '-C', extracted],
+      { windowsHide: true });
+    await scanExtractedPayload(extracted);
+    return true;
+  } finally {
+    await fs.rm(extracted, { recursive: true, force: true });
+  }
+}
+
 async function assertStagedPackage(stage) {
   const files = await walkFiles(stage);
   for (const file of files) {
     assertAllowedEntry(file);
-    if (/\.(md|lua)$/i.test(file) || /^(README\.md|LICENSE)$/i.test(file)) {
+    if (/\.tgz$/i.test(file)) await assertNpmArchivePayload(path.join(stage, file));
+    if (isTextLike(file)) {
       assertAllowedContent(file, await fs.readFile(path.join(stage, file), 'utf8'));
     }
   }
   return files;
+}
+
+async function assertReleaseZipPayload(archive) {
+  const extracted = await fs.mkdtemp(path.join(os.tmpdir(), 'cfb27-zip-scan-'));
+  const powershell = path.join(
+    process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell',
+    'v1.0', 'powershell.exe');
+  try {
+    childProcess.execFileSync(powershell,
+      ['-NoProfile', '-NonInteractive', '-Command',
+        'Expand-Archive -LiteralPath $env:ARCHIVE -DestinationPath $env:DESTINATION'], {
+        env: { ...process.env, ARCHIVE: path.resolve(archive), DESTINATION: extracted },
+        windowsHide: true,
+      });
+    const entries = await fs.readdir(extracted, { withFileTypes: true });
+    const releaseRoot = entries.length === 1 && entries[0].isDirectory()
+      ? path.join(extracted, entries[0].name) : extracted;
+    await assertStagedPackage(releaseRoot);
+    return true;
+  } finally {
+    await fs.rm(extracted, { recursive: true, force: true });
+  }
 }
 
 async function sha256File(filePath) {
@@ -129,19 +199,8 @@ async function packWorkspace(workspace, destination, outputName) {
   );
   const result = JSON.parse(stdout);
   if (!Array.isArray(result) || !result[0]?.filename) throw new Error(`npm pack failed for ${workspace}`);
-  const workspaceRoot = path.join(root, workspace);
-  const textEntries = [];
-  for (const entry of result[0].files || []) {
-    if (!/\.(cjs|mjs|js|json|md|lua|ts|txt)$/i.test(entry.path)) continue;
-    const sourcePath = path.resolve(workspaceRoot, entry.path);
-    if (path.relative(workspaceRoot, sourcePath).startsWith('..')) {
-      throw new Error(`Package entry escaped its workspace: ${entry.path}`);
-    }
-    textEntries.push({ path: `${workspace}/${entry.path}`,
-      content: await fs.readFile(sourcePath, 'utf8') });
-  }
-  assertPackageTextEntries(textEntries);
   const source = path.join(destination, result[0].filename);
+  await assertNpmArchivePayload(source);
   const output = path.join(destination, outputName);
   if (source !== output) await fs.rename(source, output);
   return output;
@@ -196,6 +255,7 @@ async function main({ artifactsDir } = {}) {
     checksumLines.push(`${await sha256File(path.join(stage, file))}  ${file.replaceAll('\\', '/')}`);
   }
   await fs.writeFile(path.join(stage, 'SHA256SUMS.txt'), `${checksumLines.join('\n')}\n`, 'utf8');
+  await assertStagedPackage(stage);
 
   const zip = path.join(dist, `cfb27-lua-hook-${version}.zip`);
   const powershell = path.join(
@@ -213,6 +273,7 @@ async function main({ artifactsDir } = {}) {
       stdio: 'inherit',
     },
   );
+  await assertReleaseZipPayload(zip);
   const zipHash = await sha256File(zip);
   await fs.writeFile(
     path.join(dist, 'SHA256SUMS.txt'),
@@ -233,5 +294,5 @@ if (require.main === module) {
 
 module.exports = {
   releaseEntries, assertAllowedEntry, assertAllowedContent, assertPackageTextEntries,
-  assertStagedPackage, main,
+  assertNpmArchivePayload, assertReleaseZipPayload, assertStagedPackage, main,
 };

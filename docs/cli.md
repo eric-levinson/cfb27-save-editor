@@ -52,7 +52,7 @@ uses a ten-second timeout for each scan page, and accepts `--max-pages` from 1
 through 4,096 (default 4,096). Callers cannot supply raw cursors or start/stop
 ranges. A read accepts one or more
 `--range 0xUPPERCASE_ADDRESS:length` options. Addresses must be canonical (for
-example, `0x7FF612340000`, not a lowercase or zero-padded form). Write-like
+example, `0x1234ABCD`, not a lowercase or zero-padded form). Write-like
 options are not accepted.
 
 A guarded transaction accepts exactly one `.json` file containing the SDK request
@@ -77,7 +77,7 @@ node packages/cli/bin/cfb27lua.cjs memory scan `
   --allow-unsupported-build --json
 
 node packages/cli/bin/cfb27lua.cjs memory read `
-  --range 0x7FF612340000:192 --allow-unsupported-build --json
+  --range 0x1234ABCD:192 --allow-unsupported-build --json
 
 node packages/cli/bin/cfb27lua.cjs memory transact `
   proof-transaction.json --json

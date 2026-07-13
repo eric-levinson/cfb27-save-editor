@@ -370,7 +370,8 @@ void TestArtifactBounds() {
 }
 
 void TestNameByteBounds() {
-  const std::string boundary(128, 'a');
+  std::string boundary;
+  for (int index = 0; index < 64; ++index) boundary += "\xC3\xA9";
   auto names = BoundedBundle(1, 3, 1, 1);
   names["profile"]["tables"][0]["logicalName"] = boundary;
   names["layout"]["tables"][0]["logicalName"] = boundary;
@@ -393,6 +394,16 @@ void TestNameByteBounds() {
   field["layout"]["tables"][0]["fields"][0]["name"] = boundary + "a";
   RefreshProfileId(field);
   RequireRejectedContaining(field, "128 UTF-8 bytes", "129-byte field name accepted");
+
+  auto invalid_table = BoundedBundle(1);
+  invalid_table["profile"]["tables"][0]["logicalName"] = std::string("\xC3\x28", 2);
+  RequireRejectedContaining(invalid_table, "valid UTF-8",
+                            "invalid UTF-8 profile table name accepted");
+  auto invalid_relationship = BoundedBundle(1, 3, 1, 1);
+  invalid_relationship["profile"]["tables"][0]["relationships"][0]["fieldName"] =
+      std::string("\xED\xA0\x80", 3);
+  RequireRejectedContaining(invalid_relationship, "valid UTF-8",
+                            "UTF-8 encoded surrogate relationship name accepted");
 }
 
 void TestCanonicalOrdering() {

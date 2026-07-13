@@ -1,5 +1,12 @@
 # Safety boundary
 
+Release documentation must not contain realistic-width process addresses unless
+each synthetic token is immediately prefixed on the same line with the exact
+marker `SYNTHETIC_ADDRESS:` (for example,
+`SYNTHETIC_ADDRESS:0x7FF612340080`). Unmarked tokens are treated as private
+runtime evidence and rejected from staged files, npm archives, and the release
+ZIP.
+
 CFB27 Lua Hook is for a separately launched offline game session. It does not
 provide, distribute, or document an anticheat bypass.
 

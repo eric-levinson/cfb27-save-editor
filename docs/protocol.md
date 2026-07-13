@@ -151,7 +151,7 @@ Request:
 Result:
 
 ```json
-{"supportedBuild":false,"complete":false,"nextCursor":"0x7FF614340000","scannedBytes":33554432,"matches":[{"address":"0x7FF612340080","regionBase":"0x7FF612340000","regionSize":65536,"protection":4,"contextAddress":"0x7FF61234007C","contextHex":"00000000CFB27A1100A1B2C3D4E5F60718293A4B00000000"}]}
+{"supportedBuild":false,"complete":false,"nextCursor":"0x2234ABCD","scannedBytes":33554432,"matches":[{"address":"0x1234AB80","regionBase":"0x1234AB00","regionSize":65536,"protection":4,"contextAddress":"0x1234AB7C","contextHex":"00000000CFB27A1100A1B2C3D4E5F60718293A4B00000000"}]}
 ```
 
 When `includeAllocationMetadata` is absent or the JSON boolean `false`, each
@@ -159,7 +159,7 @@ match has exactly the six legacy properties shown above. When it is `true`, the
 host adds exactly four properties to every match:
 
 ```json
-{"address":"0x7FF612340080","regionBase":"0x7FF612340000","regionSize":4096,"protection":4,"contextAddress":"0x7FF61234007C","contextHex":"00000000CFB27A1100A1B2C3D4E5F60718293A4B00000000","allocationBase":"0x7FF612300000","allocationSize":4194304,"allocationProtect":4,"offsetInAllocation":262272}
+{"address":"0x1234AB80","regionBase":"0x1234AB00","regionSize":4096,"protection":4,"contextAddress":"0x1234AB7C","contextHex":"00000000CFB27A1100A1B2C3D4E5F60718293A4B00000000","allocationBase":"0x12340000","allocationSize":4194304,"allocationProtect":4,"offsetInAllocation":43904}
 ```
 
 `allocationBase` is the allocation identity reported by the operating system.
@@ -208,13 +208,13 @@ any bytes are copied, so a failure never returns partial results.
 Request:
 
 ```json
-{"protocol":1,"id":"read-1","command":"readMemory","params":{"allowUnsupportedBuild":true,"ranges":[{"address":"0x7FF612340080","length":16}]}}
+{"protocol":1,"id":"read-1","command":"readMemory","params":{"allowUnsupportedBuild":true,"ranges":[{"address":"0x1234AB80","length":16}]}}
 ```
 
 Result:
 
 ```json
-{"supportedBuild":false,"ranges":[{"address":"0x7FF612340080","length":16,"bytesHex":"CFB27A1100A1B2C3D4E5F60718293A4B"}]}
+{"supportedBuild":false,"ranges":[{"address":"0x1234AB80","length":16,"bytesHex":"CFB27A1100A1B2C3D4E5F60718293A4B"}]}
 ```
 
 Both commands reject unknown parameter keys; range objects also reject unknown
@@ -231,7 +231,7 @@ reads. Hex strings are nonempty uppercase byte sequences of equal length. One
 operation is limited to 4,096 bytes and the request is limited to 65,536 bytes.
 
 ```json
-{"protocol":1,"id":"write-1","command":"writeTransaction","params":{"transactionId":"recruiting.proof-1","operations":[{"address":"0x7FF612340080","expectedHex":"1020","replacementHex":"1121"}]}}
+{"protocol":1,"id":"write-1","command":"writeTransaction","params":{"transactionId":"recruiting.proof-1","operations":[{"address":"0x1234AB80","expectedHex":"1020","replacementHex":"1121"}]}}
 ```
 
 A successful result records the verified outcome for every operation:
