@@ -82,6 +82,7 @@ const FRTK_ERROR_MESSAGES = Object.freeze({
   PROTOCOL_MISMATCH: 'Host protocol version does not match',
 });
 const FRTK_AUTHORITY = new Set(['discovery_only', 'commit_adapter_required', 'direct_verified']);
+const FRTK_FIELD_ENCODINGS = new Set(['unsigned', 'signed', 'bitfield', 'packed-reference']);
 const FRTK_REASONS = new Set(['caller_transition', 'save_changed', 'shutdown']);
 const FRTK_TRANSACTION_ID = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -102,10 +103,81 @@ function cloneJsonValue(value, depth = 0) {
   return clone;
 }
 
+function requireFrtkArtifactString(value, label) {
+  if (!isValidUtf8BoundedString(value, 128)) {
+    throw invalidRequest(`${label} must use 1..128 valid UTF-8 bytes`);
+  }
+}
+
+function validateFrtkProfileTable(table) {
+  if (!hasExactKeys(table, ['logicalName', 'tableId', 'uniqueId', 'capacity', 'recordSize',
+    'rows', 'relationships']) || !Array.isArray(table.rows) ||
+      !Array.isArray(table.relationships)) {
+    throw invalidRequest('FrTk profile table is malformed');
+  }
+  requireFrtkArtifactString(table.logicalName, 'FrTk profile table name');
+  for (const row of table.rows) {
+    if (!hasExactKeys(row, ['rowIndex', 'patternHex', 'maskHex']) ||
+        !isUpperHexBytes(row.patternHex) || row.patternHex.length > 8192 ||
+        !isUpperHexBytes(row.maskHex) || row.maskHex.length > 8192) {
+      throw invalidRequest('FrTk row evidence strings are malformed');
+    }
+  }
+  for (const relationship of table.relationships) {
+    if (!hasExactKeys(relationship,
+      ['sourceRow', 'fieldName', 'targetTableId', 'targetRow'])) {
+      throw invalidRequest('FrTk relationship is malformed');
+    }
+    requireFrtkArtifactString(relationship.fieldName, 'FrTk relationship field name');
+  }
+}
+
+function validateFrtkLayoutTable(table) {
+  if (!hasExactKeys(table, ['logicalName', 'tableId', 'uniqueId', 'capacity', 'recordSize',
+    'authorityStatus', 'fields']) || !Array.isArray(table.fields) ||
+      !FRTK_AUTHORITY.has(table.authorityStatus)) {
+    throw invalidRequest('FrTk layout table is malformed');
+  }
+  requireFrtkArtifactString(table.logicalName, 'FrTk layout table name');
+  for (const field of table.fields) {
+    if (!hasExactKeys(field, ['name', 'encoding', 'byteOffset', 'storageBytes', 'bitOffset',
+      'bitWidth', 'minimum', 'maximum', 'referenceTableId']) ||
+        !FRTK_FIELD_ENCODINGS.has(field.encoding)) {
+      throw invalidRequest('FrTk layout field is malformed');
+    }
+    requireFrtkArtifactString(field.name, 'FrTk layout field name');
+  }
+}
+
+function validateFrtkBundleStrings(bundle) {
+  const { profile, layout } = bundle;
+  if (!hasExactKeys(profile,
+    ['formatVersion', 'profileId', 'schemaIdentity', 'buildIdentity', 'tables']) ||
+      !hasExactKeys(layout, ['formatVersion', 'schemaIdentity', 'buildIdentity', 'tables']) ||
+      profile.formatVersion !== 1 || layout.formatVersion !== 1 ||
+      !/^[0-9A-F]{64}$/.test(profile.profileId) ||
+      !Array.isArray(profile.tables) || !Array.isArray(layout.tables) ||
+      profile.tables.length < 1 || profile.tables.length > 256 ||
+      layout.tables.length < 1 || layout.tables.length > 256) {
+    throw invalidRequest('FrTk version-1 profile bundle is malformed');
+  }
+  requireFrtkArtifactString(profile.schemaIdentity, 'FrTk profile schema identity');
+  requireFrtkArtifactString(profile.buildIdentity, 'FrTk profile build identity');
+  requireFrtkArtifactString(layout.schemaIdentity, 'FrTk layout schema identity');
+  requireFrtkArtifactString(layout.buildIdentity, 'FrTk layout build identity');
+  if (profile.schemaIdentity !== layout.schemaIdentity ||
+      profile.buildIdentity !== layout.buildIdentity) {
+    throw invalidRequest('FrTk profile and layout identities do not match');
+  }
+  for (const table of profile.tables) validateFrtkProfileTable(table);
+  for (const table of layout.tables) validateFrtkLayoutTable(table);
+}
+
 function cloneFrtkBundle(bundle) {
   if (!hasExactKeys(bundle, ['profile', 'layout']) || !isObject(bundle.profile) ||
       !isObject(bundle.layout)) throw invalidRequest('loadFrtkProfile requires profile and layout');
   const clone = cloneJsonValue(bundle);
+  validateFrtkBundleStrings(clone);
   if (JSON.stringify(clone).length > 1024 * 1024) {
     throw invalidRequest('FrTk profile exceeds the supported size');
   }

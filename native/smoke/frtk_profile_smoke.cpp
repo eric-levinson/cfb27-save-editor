@@ -248,6 +248,11 @@ void TestExactKeysAndVersions() {
 }
 
 void TestIdentityAndTableIdentity() {
+  auto invalid_bytes = ValidBundle();
+  invalid_bytes["profile"]["schemaIdentity"] = std::string("\xED\xA0\x80", 3);
+  invalid_bytes["layout"]["schemaIdentity"] = std::string("\xED\xA0\x80", 3);
+  RequireRejectedContaining(invalid_bytes, "Invalid schema identity",
+                            "invalid UTF-8 profile identity accepted");
   auto identity = ValidBundle();
   identity["layout"]["buildIdentity"] = "other-build";
   RequireRejected(identity, "build identity mismatch accepted");

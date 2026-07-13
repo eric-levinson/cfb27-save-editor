@@ -132,6 +132,32 @@ const VALID_TRANSACTION_RESULT = Object.freeze({
   operations: Object.freeze([Object.freeze({ index: 0, applied: true, verified: true })]),
 });
 
+function validFrtkBundle() {
+  const identity = {
+    logicalName: 'Recruit', tableId: 4269, uniqueId: 426907, capacity: 80, recordSize: 8,
+  };
+  return {
+    profile: {
+      formatVersion: 1, profileId: 'A'.repeat(64),
+      schemaIdentity: 'synthetic-schema-v1', buildIdentity: 'synthetic-build-v1',
+      tables: [{ ...identity, rows: [
+        { rowIndex: 3, patternHex: '0102030405060708', maskHex: 'FFFFFFFFFFFFFFFF' },
+        { rowIndex: 19, patternHex: '1112131415161718', maskHex: 'FFFFFFFFFFFFFFFF' },
+        { rowIndex: 37, patternHex: '2122232425262728', maskHex: 'FFFFFFFFFFFFFFFF' },
+      ], relationships: [{ sourceRow: 19, fieldName: 'RecruitRef',
+        targetTableId: 4269, targetRow: 37 }] }],
+    },
+    layout: {
+      formatVersion: 1, schemaIdentity: 'synthetic-schema-v1', buildIdentity: 'synthetic-build-v1',
+      tables: [{ ...identity, authorityStatus: 'discovery_only', fields: [{
+        name: 'RecruitRef', encoding: 'packed-reference', byteOffset: 0, storageBytes: 4,
+        bitOffset: 0, bitWidth: 32, minimum: 0, maximum: 0xFFFFFFFF,
+        referenceTableId: 4269,
+      }] }],
+    },
+  };
+}
+
 test('SDK publishes stable memory error codes', () => {
   for (const code of ['MEMORY_ACCESS_DENIED', 'SCAN_LIMIT_EXCEEDED', 'TOO_MANY_MATCHES']) {
     assert.ok(ERROR_CODES.includes(code), `missing ${code}`);
@@ -192,7 +218,7 @@ test('typed FrTk methods negotiate capabilities and return fixed sanitized shape
         writesAllowed: true, capabilities }
       : results[request.command];
   });
-  const bundle = { profile: { version: 1 }, layout: { version: 1 } };
+  const bundle = validFrtkBundle();
   assert.deepEqual(await client.loadFrtkProfile(bundle), results.loadFrtkProfile);
   assert.deepEqual(await client.discoverFrtkCatalog(), results.discoverFrtkCatalog);
   assert.deepEqual(await client.inspectFrtkCatalog({ generation: 4 }), results.inspectFrtkCatalog);
@@ -253,6 +279,62 @@ test('typed FrTk field selectors reject invalid Unicode and UTF-8 overflow befor
   }
 });
 
+test('loadFrtkProfile deeply rejects malformed v1 artifact strings before host I/O', async () => {
+  const client = createClient({ pipeName: testPipeName('unused'), timeoutMs: 25 });
+  const mutations = [
+    (bundle, value) => { bundle.profile.schemaIdentity = value; },
+    (bundle, value) => { bundle.profile.buildIdentity = value; },
+    (bundle, value) => { bundle.layout.schemaIdentity = value; },
+    (bundle, value) => { bundle.layout.buildIdentity = value; },
+    (bundle, value) => { bundle.profile.tables[0].logicalName = value; },
+    (bundle, value) => { bundle.profile.tables[0].relationships[0].fieldName = value; },
+    (bundle, value) => { bundle.layout.tables[0].logicalName = value; },
+    (bundle, value) => { bundle.layout.tables[0].fields[0].name = value; },
+  ];
+  for (const invalid of ['\uD800', '\uDC00', 'é'.repeat(64) + 'a']) {
+    for (const mutate of mutations) {
+      const bundle = validFrtkBundle();
+      mutate(bundle, invalid);
+      await assert.rejects(client.loadFrtkProfile(bundle),
+        (error) => error.code === 'INVALID_REQUEST', invalid);
+    }
+  }
+  for (const mutate of [
+    (bundle) => { bundle.profile.profileId = '\uD800'; },
+    (bundle) => { bundle.layout.tables[0].authorityStatus = '\uD800'; },
+    (bundle) => { bundle.layout.tables[0].fields[0].encoding = '\uD800'; },
+    (bundle) => { bundle.profile.tables[0].rows[0].patternHex = '\uD800'; },
+  ]) {
+    const bundle = validFrtkBundle();
+    mutate(bundle);
+    await assert.rejects(client.loadFrtkProfile(bundle),
+      (error) => error.code === 'INVALID_REQUEST');
+  }
+});
+
+test('loadFrtkProfile accepts 128-byte Unicode artifact strings and clones them before I/O',
+  async (t) => {
+    const requests = [];
+    const client = await fakeClient(t, (request) => {
+      requests.push(request);
+      if (request.command === 'hello') return { protocolVersion: 1, hostVersion: '0.2.0',
+        supportedBuild: true, writesAllowed: true, capabilities: ['frtkProfileV1'] };
+      return { profileId: 'A'.repeat(64), schemaIdentity: 'é'.repeat(64),
+        buildIdentity: 'é'.repeat(64), tableCount: 1 };
+    });
+    const bundle = validFrtkBundle();
+    bundle.profile.schemaIdentity = bundle.layout.schemaIdentity = 'é'.repeat(64);
+    bundle.profile.buildIdentity = bundle.layout.buildIdentity = 'é'.repeat(64);
+    bundle.profile.tables[0].logicalName = bundle.layout.tables[0].logicalName = 'é'.repeat(64);
+    bundle.profile.tables[0].relationships[0].fieldName = 'é'.repeat(64);
+    bundle.layout.tables[0].fields[0].name = 'é'.repeat(64);
+    const load = client.loadFrtkProfile(bundle);
+    bundle.profile.tables[0].logicalName = 'mutated';
+    await load;
+    assert.equal(requests.find(({ command }) => command === 'loadFrtkProfile')
+      .params.profile.tables[0].logicalName, 'é'.repeat(64));
+  });
+
 test('unproven FrTk authority negotiates capability but sends no transaction', async (t) => {
   const commands = [];
   const client = await fakeClient(t, (request) => {
@@ -312,7 +394,7 @@ test('loadFrtkProfileFromFile sanitizes host schema validation failures', async 
     } };
   });
   await assert.rejects(client.loadFrtkProfileFromFile('C:\\secret\\profile.json', {
-    fileSystem: { readFile: async () => JSON.stringify({ profile: {}, layout: {} }) },
+    fileSystem: { readFile: async () => JSON.stringify(validFrtkBundle()) },
   }), (error) => error.code === 'FRTK_PROFILE_INVALID' &&
     error.message === 'FrTk profile is invalid' && error.details === undefined);
 });
@@ -357,10 +439,9 @@ test('FrTk profile, record, and transaction inputs are cloned before capability 
     return { transactionId: 'frtk.clone-1', status: 'applied_verified', changedFields: 1 };
   });
 
-  const bundle = { profile: { version: 1, nested: { marker: 'original' } },
-    layout: { version: 1 } };
+  const bundle = validFrtkBundle();
   const load = client.loadFrtkProfile(bundle);
-  bundle.profile.nested.marker = 'mutated';
+  bundle.profile.tables[0].logicalName = 'Mutated';
   await load;
   await client.inspectFrtkCatalog({ generation: 4 });
   const readOptions = { generation: 4,
@@ -376,7 +457,7 @@ test('FrTk profile, record, and transaction inputs are cloned before capability 
   await transact;
 
   assert.equal(requests.find((item) => item.command === 'loadFrtkProfile')
-    .params.profile.nested.marker, 'original');
+    .params.profile.tables[0].logicalName, 'Recruit');
   assert.deepEqual(requests.find((item) => item.command === 'readFrtkRecords').params.records,
     [{ uniqueId: 900001, row: 7, fields: ['Score'] }]);
   assert.deepEqual(requests.find((item) => item.command === 'transactFrtkFields').params.changes,

@@ -29,3 +29,12 @@ After the minimal implementations, the focused native, SDK, and release-package 
 - `git diff --check`: passed.
 
 No installation, game launch, or MMC launch was performed.
+
+## Reviewer Important Follow-up
+
+- `loadFrtkProfile` now validates the complete cloned version-1 artifact string surface before capability negotiation or socket I/O: fixed uppercase profile ID, profile/layout schema and build identities, table logical names, relationship field names, layout field names, row hex strings, authority status, and field encoding.
+- Every bounded public artifact name/identity uses strict Unicode-scalar validation and the native-compatible 1..128 UTF-8 byte limit. Malformed direct bundles return `INVALID_REQUEST`; `loadFrtkProfileFromFile` continues to map them to sanitized `FRTK_PROFILE_INVALID`.
+- Valid 128-byte multibyte strings remain accepted, and the valid-artifact caller mutation tests confirm the transmitted clone is isolated from post-call changes.
+- Both native `Identity` helpers now call strict `IsValidUtf8`; profile parsing and direct `SchemaRegistry::Load` reject programmatically constructed UTF-8 surrogate byte sequences.
+
+Follow-up strict TDD evidence: the new SDK test first reached the unused pipe instead of returning `INVALID_REQUEST`, while both native smokes first accepted invalid identity bytes. After implementation, the focused suite passed. The fresh full gate then passed the Visual Studio Release build, all 11 native smokes, `npm run check`, all 163 Node tests, package preview, and independent stage/ZIP/two-TGZ rescans. The refreshed ZIP SHA-256 is `4892C124D8997B545D27BA3E71C4EAB9939E86AD37B5EB94DAE28129B1CE6BC3`.

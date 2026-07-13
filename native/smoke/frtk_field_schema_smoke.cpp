@@ -133,6 +133,11 @@ void TestSchemaRegistry() {
   Require(!registry.LoadTrustedForTesting(invalid_field_name, &error) &&
               error.find("valid UTF-8") != std::string::npos,
           "overlong UTF-8 field name accepted");
+  auto invalid_identity = ValidLayout();
+  invalid_identity["schemaIdentity"] = std::string("\xED\xA0\x80", 3);
+  Require(!registry.LoadTrustedForTesting(invalid_identity, &error) &&
+              error.find("Invalid schema identity") != std::string::npos,
+          "invalid UTF-8 direct schema identity accepted");
   auto table_order = ValidLayout();
   std::swap(table_order["tables"][0], table_order["tables"][1]);
   Require(!registry.LoadTrustedForTesting(table_order, &error) &&

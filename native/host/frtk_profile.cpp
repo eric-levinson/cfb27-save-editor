@@ -99,7 +99,9 @@ std::uint64_t UnsignedBetween(const json& value, std::uint64_t minimum,
 std::string Identity(const json& value, const char* message) {
   if (!value.is_string()) throw std::invalid_argument(message);
   auto result = value.get<std::string>();
-  if (result.empty() || result.size() > 128) throw std::invalid_argument(message);
+  if (!IsValidUtf8(result) || result.empty() || result.size() > 128) {
+    throw std::invalid_argument(message);
+  }
   return result;
 }
 
