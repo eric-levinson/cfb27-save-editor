@@ -535,13 +535,13 @@ int wmain(int argc, wchar_t** argv) {
   if (timeout_keys != expected_timeout_keys ||
       timeout_details.value("stage", "") != "scan" ||
       timeout_details.value("tableUniqueId", 0u) != 900001u ||
-      timeout_details["fingerprintOrdinal"] != 0 ||
-      timeout_details.value("completedFingerprintCount", 1ull) != 0 ||
-      timeout_details.value("pagesScanned", 1ull) != 0 ||
-      timeout_details.value("chunksScanned", 1ull) != 0 ||
-      timeout_details.value("scannedBytes", 1ull) != 0 ||
-      timeout_details.value("candidateWindows", 1ull) != 0 ||
-      timeout_details.value("cappedMatches", 1ull) != 0) {
+      timeout_details["fingerprintOrdinal"] != 2 ||
+      timeout_details.value("completedFingerprintCount", 0ull) != 2 ||
+      timeout_details.value("pagesScanned", 0ull) != 3 ||
+      timeout_details.value("chunksScanned", 0ull) != 5 ||
+      timeout_details.value("scannedBytes", 0ull) != 5120 ||
+      timeout_details.value("candidateWindows", 0ull) != 7 ||
+      timeout_details.value("cappedMatches", 0ull) != 8) {
     std::cerr << "frtk timeout details: " << timeout_details.dump() << '\n';
     return 146;
   }

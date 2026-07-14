@@ -82,7 +82,12 @@ void AddCounters(DiscoveryCounters& target, const DiscoveryCounters& value) {
   SaturatingAdd(target.chunks_scanned, value.chunks_scanned);
   SaturatingAdd(target.scanned_bytes, value.scanned_bytes);
   SaturatingAdd(target.candidate_windows, value.candidate_windows);
-  SaturatingAdd(target.capped_matches, value.capped_matches);
+  const auto match_cap = static_cast<std::uint64_t>(kMaxFingerprintMatches);
+  target.capped_matches =
+      target.capped_matches >= match_cap ||
+              value.capped_matches >= match_cap - target.capped_matches
+          ? match_cap
+          : target.capped_matches + value.capped_matches;
 }
 
 }  // namespace

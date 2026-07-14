@@ -185,6 +185,9 @@ class FakeBackend final : public DiscoveryBackend {
         if (match) {
           result.matches.push_back({allocation.base + offset, allocation.base,
                                     allocation.bytes.size()});
+          result.counters.capped_matches = (std::min)(
+              static_cast<std::uint64_t>(result.matches.size()),
+              static_cast<std::uint64_t>(max_matches));
           if (result.matches.size() == max_matches) return result;
         }
       }
@@ -475,12 +478,34 @@ void TestDeadlineRejectsPartialDiscovery() {
               result.timeout->counters.chunks_scanned == 3 &&
               result.timeout->counters.scanned_bytes == 4096 &&
               result.timeout->counters.candidate_windows == 4 &&
-              result.timeout->counters.capped_matches == 1,
+              result.timeout->counters.capped_matches == 4,
           "deadline reports bounded cumulative scan counters");
   Require(result.timeout->elapsed_milliseconds <= kMaxSafeDiagnosticCounter,
           "deadline elapsed time is a bounded safe integer");
   Require(elapsed < std::chrono::milliseconds(500),
           "native deadline terminates well before SDK timeout");
+}
+
+void TestDeadlineCapsCumulativeMatchesAcrossFingerprints() {
+  auto bundle = Bundle();
+  bundle.tables.resize(1);
+  FakeBackend backend;
+  for (std::uintptr_t base : {0x100000u, 0x200000u, 0x300000u, 0x400000u}) {
+    backend.PutTable(bundle.tables[0], base);
+  }
+  backend.slow_after_scan = 3;
+  const auto result = DiscoverTables(
+      bundle, backend,
+      DiscoveryDeadline(std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(25)));
+  Require(!result.valid && result.code == "OPERATION_TIMEOUT" &&
+              result.timeout.has_value(),
+          "multi-fingerprint deadline returns timeout progress");
+  Require(result.timeout->fingerprint_ordinal == 2 &&
+              result.timeout->completed_fingerprint_count == 2,
+          "multi-fingerprint deadline preserves scan progress");
+  Require(result.timeout->counters.capped_matches == 8,
+          "cumulative timeout matches saturate at the public native cap");
 }
 
 void TestDeadlineBoundsAllocationValidation() {
@@ -599,6 +624,7 @@ int main() {
     TestPersistentUniqueIdentityAndBuildLocalReferences();
     TestDistinctFingerprintsScanOnceGlobally();
     TestDeadlineRejectsPartialDiscovery();
+    TestDeadlineCapsCumulativeMatchesAcrossFingerprints();
     TestDeadlineBoundsAllocationValidation();
     TestRelationshipsUseIndependentResolutionSnapshot();
     TestSchemaAuthoritativeRelationshipFields();

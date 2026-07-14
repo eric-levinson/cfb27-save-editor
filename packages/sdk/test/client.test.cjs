@@ -291,12 +291,12 @@ test('discoverFrtkCatalog rejects public selectors before host I/O', async () =>
     (error) => error.code === 'INVALID_REQUEST');
 });
 
-test('discoverFrtkCatalog preserves the exact sanitized native timeout schema', async (t) => {
+test('discoverFrtkCatalog preserves multi-fingerprint native timeout progress', async (t) => {
   const details = {
     stage: 'scan', tableUniqueId: 900001, fingerprintOrdinal: 2,
-    completedFingerprintCount: 7, elapsedMilliseconds: 1999,
-    pagesScanned: 3, chunksScanned: 24, scannedBytes: 96 * 1024 * 1024,
-    candidateWindows: 24576, cappedMatches: 8,
+    completedFingerprintCount: 2, elapsedMilliseconds: 1999,
+    pagesScanned: 3, chunksScanned: 5, scannedBytes: 5120,
+    candidateWindows: 7, cappedMatches: 8,
   };
   const client = await fakeRawResponseClient(t, (request) => request.command === 'hello'
     ? { protocol: 1, id: request.id, ok: true,

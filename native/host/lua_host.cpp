@@ -263,10 +263,31 @@ bool WriteEnvironmentAllowed() {
 
 class ProcessDiscoveryBackend final : public cfb27::frtk::DiscoveryBackend {
  public:
+  explicit ProcessDiscoveryBackend(bool smoke_timeout_progress = false)
+      : smoke_timeout_progress_(smoke_timeout_progress) {}
+
   cfb27::frtk::ScanObservationResult Scan(
       const cfb27::frtk::RowFingerprint& fingerprint,
       std::size_t max_matches,
       const cfb27::frtk::DiscoveryDeadline& deadline) override {
+    if (smoke_timeout_progress_) {
+      ++smoke_timeout_scan_count_;
+      if (smoke_timeout_scan_count_ == 3) {
+        return {.complete = false,
+                .code = "OPERATION_TIMEOUT",
+                .counters = {.pages_scanned = 1,
+                             .chunks_scanned = 1,
+                             .scanned_bytes = 1024,
+                             .candidate_windows = 1,
+                             .capped_matches = 1}};
+      }
+      return {.complete = true,
+              .counters = {.pages_scanned = 1,
+                           .chunks_scanned = 2,
+                           .scanned_bytes = 2048,
+                           .candidate_windows = 3,
+                           .capped_matches = 4}};
+    }
     cfb27::frtk::ScanObservationResult output{.complete = false};
     const auto add = [](std::uint64_t& target, std::uint64_t value) {
       target = value > cfb27::frtk::kMaxSafeDiagnosticCounter - target
@@ -361,6 +382,10 @@ class ProcessDiscoveryBackend final : public cfb27::frtk::DiscoveryBackend {
     }
     return cursor == end;
   }
+
+ private:
+  bool smoke_timeout_progress_{};
+  std::size_t smoke_timeout_scan_count_{};
 };
 
 std::unique_ptr<ProcessDiscoveryBackend> g_lua_db_validation_backend;
@@ -1261,14 +1286,12 @@ cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
     if (!g_frtk_profile)
       return ErrorResponse(id, "FRTK_PROFILE_INVALID", "No FrTk profile is loaded");
     constexpr auto kDiscoveryBudget = std::chrono::milliseconds(2000);
-    const auto discovery_budget =
+    const bool smoke_timeout_progress =
         SmokeWritesAllowed() &&
-                EnvironmentIsOne(L"CFB27_SMOKE_FRTK_TIMEOUT")
-            ? std::chrono::milliseconds(0)
-            : kDiscoveryBudget;
+        EnvironmentIsOne(L"CFB27_SMOKE_FRTK_TIMEOUT");
     const cfb27::frtk::DiscoveryDeadline deadline(
-        std::chrono::steady_clock::now() + discovery_budget);
-    ProcessDiscoveryBackend backend;
+        std::chrono::steady_clock::now() + kDiscoveryBudget);
+    ProcessDiscoveryBackend backend(smoke_timeout_progress);
     const auto discovery = cfb27::frtk::DiscoverTables(
         *g_frtk_profile, backend, deadline);
     if (!discovery.valid && discovery.code == "OPERATION_TIMEOUT") {
