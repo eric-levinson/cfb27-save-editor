@@ -12,7 +12,7 @@ const PLAYER_STRING_FIELDS = Object.freeze({
   FirstName: Object.freeze({ offset: 0, size: 17, required: true }),
   GenericHeadAssetName: Object.freeze({ offset: 17, size: 33, required: false }),
   LastName: Object.freeze({ offset: 50, size: 21, required: true }),
-  HomeTown: Object.freeze({ offset: 112, size: 26, required: true }),
+  HomeTown: Object.freeze({ offset: 112, size: 26, required: false }),
 });
 
 function fail(message) {
@@ -142,14 +142,14 @@ async function openBrooksWriteTables(openCollegeSave, savePath) {
   return { file, playerTable, recruitTable };
 }
 
-async function defaultRunBrooks({ savePath, brooksRoot, seed, outDir }) {
+async function defaultRunBrooks({ savePath, brooksRoot, seed, outDir, skeleton }) {
   const load = (relativePath) => require(path.join(brooksRoot, relativePath));
   const { runPreview } = load('franchise-lab/generator/preview.js');
   const { loadRecruitPool } = load('franchise-lab/generator/join.js');
   const { planApply, setRecordField } = load('franchise-lab/generator/apply.js');
   const { openCollegeSave } = load('franchise-lab/college-franchise.js');
 
-  const previewResult = await runPreview({ save: savePath, seed, outDir });
+  const previewResult = await runPreview({ save: savePath, seed, outDir, skeleton });
   const preview = JSON.parse(await fsp.readFile(previewResult.previewPath, 'utf8'));
   const { pool } = await loadRecruitPool(savePath);
   const planned = planApply(preview, pool);
@@ -217,7 +217,13 @@ async function generateLiveClassPlan({ savePath, brooksRoot, seed = 'default', d
   let raw;
   let caught;
   try {
-    raw = await runBrooks({ savePath: resolvedSave, brooksRoot: resolvedBrooks, seed, outDir });
+    raw = await runBrooks({
+      savePath: resolvedSave,
+      brooksRoot: resolvedBrooks,
+      seed,
+      outDir,
+      skeleton: true,
+    });
   } catch (error) {
     caught = error;
   } finally {

@@ -75,6 +75,23 @@ test('normalizes Brooks output into masked numeric patches and mandatory names',
   assert.equal((await fs.readFile(savePath, 'utf8')), 'read-only-save-fixture');
 });
 
+test('requests Brooks skeleton mode for every live class plan', async (t) => {
+  const { savePath } = await fixture(t);
+  let received;
+  await generateLiveClassPlan({
+    savePath,
+    brooksRoot: path.dirname(savePath),
+    dependencies: {
+      runBrooks: async (options) => {
+        received = options;
+        return rawPlan();
+      },
+    },
+  });
+
+  assert.equal(received.skeleton, true);
+});
+
 test('buildMaskedPatch marks complete declared fields, including unchanged bits', () => {
   const patch = buildMaskedPatch(
     Buffer.from('0000', 'hex'),
@@ -102,6 +119,18 @@ test('encodes mandatory Player strings into fixed table2 subslots', () => {
   assert.equal(slot.subarray(50, 71).toString('utf8').replace(/\0.*$/s, ''), 'Bee');
   assert.equal(slot.subarray(112, 138).toString('utf8').replace(/\0.*$/s, ''), 'Cedar Park');
   assert.equal(slot[17], 0x7f, 'optional head slot remains untouched');
+});
+
+test('preserves the existing hometown when skeleton mode omits it', () => {
+  const before = Buffer.alloc(138, 0x7f);
+  before.fill(0, 112, 138);
+  Buffer.from('Nashville', 'utf8').copy(before, 112);
+
+  const slot = encodePlayerStringSlot(before, {
+    FirstName: 'Solomon', LastName: 'Bennett', GenericHeadAssetName: 'Unique_Test_1',
+  });
+
+  assert.deepEqual(slot.subarray(112, 138), before.subarray(112, 138));
 });
 
 test('opens Brooks records schema-less so Field_N write aliases remain available', async () => {
