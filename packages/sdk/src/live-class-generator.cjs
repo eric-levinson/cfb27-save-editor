@@ -247,7 +247,7 @@ async function generateLiveClassPlan({ savePath, brooksRoot, seed = 'default', d
     recruitRecordSize: raw.recruitRecordSize,
     playerRows: Object.freeze(playerRows),
     recruitRows: Object.freeze(recruitRows),
-    gearSkipped: Number.isInteger(raw.gearSkipped) ? raw.gearSkipped : 0,
+    gearSkipped: playerRows.length,
   });
 }
 

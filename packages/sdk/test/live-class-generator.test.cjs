@@ -46,7 +46,7 @@ function rawPlan(overrides = {}) {
       after: recruitAfter,
       fields: [{ offset: 16, length: 4 }],
     }],
-    gearSkipped: 1,
+    gearSkipped: 0,
     ...overrides,
   };
 }
