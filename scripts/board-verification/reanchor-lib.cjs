@@ -205,6 +205,7 @@ async function locateTable(client, table, { log = (message) => process.stderr.wr
     ...table,
     ...selected,
     freelistHead: validation.freelistHeadValue,
+    candidateCount: candidates.length,
     signatureMatches,
     validation,
   };
