@@ -1,24 +1,30 @@
 'use strict';
 
-const TABLES = new Map([
+const TABLE_ENTRIES = [
   [4168, Object.freeze({ id: 4168, table1Length: 40444, words: 9, capacity: 1120, stride: 36, headerSize: 324, offsetStart: 0 })],
   [4176, Object.freeze({ id: 4176, table1Length: 19364, words: 1, capacity: 4830, stride: 4, headerSize: 244, offsetStart: 0 })],
   [4190, Object.freeze({ id: 4190, table1Length: 37560, words: 1, capacity: 9380, stride: 4, headerSize: 240, offsetStart: 0 })],
   [4251, Object.freeze({ id: 4251, table1Length: 1704, words: 3, capacity: 138, stride: 12, headerSize: 248, offsetStart: 0 })],
   [5790, Object.freeze({ id: 5790, table1Length: 77312, words: 3, capacity: 4830, stride: 12, headerSize: 265, offsetStart: 33, isArray: true })],
   [5847, Object.freeze({ id: 5847, table1Length: 19904, words: 35, capacity: 138, stride: 140, headerSize: 263, offsetStart: 31, isArray: true })],
-]);
-for (const method of ['set', 'delete', 'clear']) {
-  Object.defineProperty(TABLES, method, {
-    value() {
-      throw new TypeError('TABLES is read-only');
-    },
-    configurable: false,
-    enumerable: false,
-    writable: false,
-  });
-}
-Object.freeze(TABLES);
+];
+const TABLE_LOOKUP = new Map(TABLE_ENTRIES);
+const readOnlyError = () => { throw new TypeError('TABLES is read-only'); };
+const TABLES = Object.freeze({
+  get size() { return TABLE_LOOKUP.size; },
+  get(id) { return TABLE_LOOKUP.get(id); },
+  has(id) { return TABLE_LOOKUP.has(id); },
+  keys() { return TABLE_LOOKUP.keys(); },
+  values() { return TABLE_LOOKUP.values(); },
+  entries() { return TABLE_LOOKUP.entries(); },
+  forEach(callback, thisArg) {
+    TABLE_LOOKUP.forEach((value, key) => callback.call(thisArg, value, key, TABLES));
+  },
+  [Symbol.iterator]() { return TABLE_LOOKUP[Symbol.iterator](); },
+  set: readOnlyError,
+  delete: readOnlyError,
+  clear: readOnlyError,
+});
 
 function canonical(value) {
   return `0x${BigInt(value).toString(16).toUpperCase()}`;
@@ -150,6 +156,7 @@ async function locateTable(client, table, { log = (message) => process.stderr.wr
   const candidates = [];
   let cursor = process.env.CFB27_SCAN_START || '0x380000000';
   let signatureMatches = 0;
+  let scanComplete = false;
   for (let pageNumber = 0; pageNumber < 512; pageNumber += 1) {
     const page = await client.scanMemoryPage({
       patternHex: signature(table),
@@ -179,11 +186,17 @@ async function locateTable(client, table, { log = (message) => process.stderr.wr
         // A signature at a page boundary can be valid while its derived region is not.
       }
     }
-    if (page.complete) break;
+    if (page.complete) {
+      scanComplete = true;
+      break;
+    }
     cursor = page.nextCursor;
     if (pageNumber > 0 && pageNumber % 16 === 0) log(`  scanned ${pageNumber + 1} pages...\n`);
   }
 
+  if (!scanComplete) {
+    throw new Error(`Table ${table.id} scan did not complete within 512 pages`);
+  }
   const selected = selectTableCandidate(table, candidates);
   selected.freelistHead = (await readRange(client, selected.header + 24n, 4)).readUInt32LE(0);
   const validation = await validateAnchorReread(client, table, selected);
@@ -198,9 +211,12 @@ async function locateTable(client, table, { log = (message) => process.stderr.wr
 }
 
 function findUserBoard(tables) {
+  const userRows = tables.get(4168);
   const boardIndex = tables.get(4251);
   const membership = tables.get(5847);
-  if (!boardIndex || !membership) throw new Error('Board index and membership tables are required');
+  if (!userRows || !boardIndex || !membership) {
+    throw new Error('User rows, board index, and membership tables are required');
+  }
   const candidates = [];
   for (let boardRow = 0; boardRow < boardIndex.capacity; boardRow += 1) {
     const boardOffset = boardRow * boardIndex.stride;
@@ -211,6 +227,7 @@ function findUserBoard(tables) {
     const membershipOffset = boardRef.row * membership.stride;
     let userRefs = 0;
     let cpuRefs = 0;
+    let invalidUserRefs = 0;
     let occupied = 0;
     let firstFreeSlot = -1;
     let compact = true;
@@ -223,7 +240,10 @@ function findUserBoard(tables) {
       if (firstFreeSlot >= 0) compact = false;
       occupied += 1;
       const ref = decodeRef(value);
-      if (ref.tableId === 4168) userRefs += 1;
+      if (ref.tableId === 4168) {
+        userRefs += 1;
+        if (ref.row >= userRows.capacity) invalidUserRefs += 1;
+      }
       if (ref.tableId === 4288) cpuRefs += 1;
     }
     candidates.push({
@@ -233,6 +253,7 @@ function findUserBoard(tables) {
       occupied,
       userRefs,
       cpuRefs,
+      invalidUserRefs,
       firstFreeSlot,
       compact,
     });
@@ -242,15 +263,26 @@ function findUserBoard(tables) {
     (right.userRefs - left.userRefs) ||
     (left.cpuRefs - right.cpuRefs) ||
     (right.occupied - left.occupied));
-  const userCandidates = candidates.filter((candidate) => candidate.userRefs > 0 && candidate.cpuRefs === 0);
-  const compactCandidates = userCandidates.filter((candidate) => candidate.compact);
-  if (compactCandidates.length === 0 && userCandidates.length > 0) {
-    throw new Error('Could not identify a compact user board membership row');
-  }
-  if (compactCandidates.length !== 1) {
+  const userCandidates = candidates.filter((candidate) => candidate.userRefs > 0);
+  const eligibleCandidates = userCandidates.filter((candidate) =>
+    candidate.compact && candidate.invalidUserRefs === 0 &&
+    candidate.occupied === candidate.userRefs);
+  if (eligibleCandidates.length > 1) {
     throw new Error('Could not uniquely identify the user board from table 4168 membership references');
   }
-  const selected = compactCandidates[0];
+  if (eligibleCandidates.length === 0) {
+    if (userCandidates.some((candidate) => candidate.invalidUserRefs > 0)) {
+      throw new Error('User board membership contains an out-of-range table 4168 reference');
+    }
+    if (userCandidates.some((candidate) => candidate.occupied !== candidate.userRefs)) {
+      throw new Error('User board membership is not user-only and contains a mixed table reference');
+    }
+    if (userCandidates.some((candidate) => !candidate.compact)) {
+      throw new Error('Could not identify a compact user board membership row');
+    }
+    throw new Error('Could not uniquely identify the user board from table 4168 membership references');
+  }
+  const selected = eligibleCandidates[0];
   if (selected.firstFreeSlot < 0) throw new Error('The active recruiting board has no free membership slot');
   return { selected, candidates: candidates.slice(0, 8) };
 }
