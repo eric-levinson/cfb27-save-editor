@@ -6,6 +6,7 @@
 #include "memory_transaction.h"
 #include "native_call.h"
 #include "board_mutation.h"
+#include "game_builds.h"
 #include "frtk_catalog.h"
 #include "frtk_lua_api.h"
 #include "frtk_profile.h"
@@ -1520,6 +1521,12 @@ cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
       return ErrorResponse(id, "UNSUPPORTED_BUILD",
                            "Board mutations require the supported offline game build");
     }
+    const auto* board_build = cfb27::game_builds::FindBuild(
+        kSupportedExecutableSize, kSupportedExecutableSha256);
+    if (!cfb27::game_builds::IsCertified(board_build) || !board_build->board) {
+      return ErrorResponse(id, "UNSUPPORTED_BUILD",
+                           "Board mutations require a certified board layout");
+    }
     const auto operation = command == "addBoard"
         ? cfb27::board_mutation::Operation::kAdd
         : cfb27::board_mutation::Operation::kRemove;
@@ -1527,7 +1534,7 @@ cfb27::protocol::Json HandleV1Request(const cfb27::protocol::Json& request) {
     {
       std::scoped_lock call_lock(g_host_write_mutex, g_native_call_mutex);
       mutation = cfb27::board_mutation::Invoke(
-          operation, static_cast<std::uint32_t>(recruit_row64),
+          *board_build->board, operation, static_cast<std::uint32_t>(recruit_row64),
           static_cast<std::uint32_t>(team_row64));
     }
     using BoardStatus = cfb27::board_mutation::Status;
